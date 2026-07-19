@@ -187,7 +187,7 @@ window.addEventListener('keydown',e=>{
   keys[k]=true;
   if(k==='e'||k===' '){ actionPress=true; e.preventDefault(); }
   if(k==='q'){ shovePress=true; e.preventDefault(); }
-  if(k==='enter'){ if(G.screen==='title')startDay(); else if(G.screen==='summary')startDay(); }
+  if(k==='enter'){ if(G.screen==='title')startDay(); else if(G.screen==='summary')startDay(); else if(G.screen==='story')beginDay(); }
 });
 window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
 
@@ -553,6 +553,87 @@ const COACH_LINES=[
 ];
 const MATH_FACTS=['SEVEN TIMES EIGHT IS FIFTY SIX','PI IS ROUGHLY THREE POINT ONE FOUR','A SQUARED PLUS B SQUARED','NINE TIMES SIX IS FIFTY FOUR','THE HYPOTENUSE IS LONGEST','TWELVE TIMES TWELVE IS ONE FORTY FOUR','DERIVATIVE OF X SQUARED IS TWO X'];
 
+// ============================== [V3 CONTENT] ================================
+// teachers
+const TEACHERS_DEF=[
+  {name:'Ms. Yapp', post:{x:6,y:2.8}, hairStyle:1,
+   pal:{body:'#c96a8e',body2:'#a8577a',skin:'#f0c39a',hair:'#7a4a2a',legs:'#5a4a5e'},
+   lines:[
+     'MS. YAPP: "eyes UP. the semicolon will not learn itself."',
+     'MS. YAPP: "phones away or they go in the BUCKET."',
+     'MS. YAPP: "i can hear someone vaping. i have EARS, Hunter."',
+     'MS. YAPP: "this essay was due yesterday. spiritually."',
+   ]},
+  {name:'Mr. Feldspar', post:{x:23,y:2.8}, hairStyle:2, tall:true,
+   pal:{body:'#6a8e5a',body2:'#57764a',skin:'#e6b58c',hair:'#8a8a92',legs:'#3a4048'},
+   lines:[
+     'MR. FELDSPAR: "do NOT lick the battery. AGAIN."',
+     'MR. FELDSPAR: "the skeleton is school property. put him DOWN."',
+     'MR. FELDSPAR: "today\'s lab: vibes (applied)."',
+     'MR. FELDSPAR: "safety goggles ON. this is a dry-erase marker."',
+   ]},
+];
+// ambient student body
+const AMB_NAMES=['Greg (mid)','Paisleigh','Hunter IV','Lil Backpack','Mackenzee','Nugget','Fortnite Kyle','Sad Ethan'];
+const CLASS_SEATS=[];
+for(let r=0;r<3;r++)for(let c=0;c<4;c++){ if(!(c===1&&r===1)) CLASS_SEATS.push({x:3+c*2, deskY:3+r*2}); }
+for(let r=0;r<3;r++)for(let c=0;c<4;c++){ CLASS_SEATS.push({x:20+c*2, deskY:3+r*2}); }
+const HALL_SPOTS=[{x:4,y:11},{x:9,y:12},{x:14,y:11},{x:20,y:12},{x:25,y:11},{x:28,y:20},{x:16,y:12},{x:28,y:12}];
+// story arc
+const DAY_STORIES=[
+  {title:'ORIENTATION', lines:[
+    'Your uncle invested your entire college fund in a coin called $LUNCHABLE.',
+    'It hit zero during the pledge of allegiance.',
+    'Fine. You\'ll fund college yourself — one bathroom deal at a time.',
+    'Go to class. Sell between bells. Avoid the kid with the sash.']},
+  {title:'THE RIVAL', lines:[
+    'Chadwick posted a "market analysis" of YOUR bathroom on LinkedIn.',
+    '47 impressions. He printed it out. He laminated it.',
+    'This means war. Outsell him or become a case study.']},
+  {title:'SUPPLY CHAIN ISSUES', lines:[
+    'Big Toe\'s cousin in Ohio "got promoted to regional manager."',
+    'Of what? Unclear. Prices are weird now and morale is worse.',
+    'Rumor: customers pay more when they\'re scared. Everyone is scared.']},
+  {title:'THE AUDIT', lines:[
+    'Principal Krunk announced a "vibes audit." Nobody knows what it means.',
+    'The teachers are on edge. The hall monitor did wind sprints all weekend.',
+    'Big day for premium product. Fear sells.']},
+  {title:'GRADUATION (OF SORTS)', lines:[
+    'The guidance counselor asked if your "small business" has a pitch deck.',
+    'Chadwick heard. He\'s furious. He respects it. He\'s furious about respecting it.',
+    'Beat him today and you own this school\'s entire gray economy.']},
+];
+const STORY_EXTRA=[
+  'The vending machine is out of everything except loose batteries.',
+  'Someone pulled the fire alarm "as a bit." It\'s that kind of day.',
+  'The school WiFi password changed. Morale: zero. Demand: UP.',
+  'Chadwick started a podcast. Nobody listened. He\'s vulnerable.',
+  'Big Toe unveiled a "loyalty program." It\'s a napkin with tally marks.',
+];
+// in-class activities
+const QUIZ_QS=[
+  {q:'POP QUIZ: WW2 mainly happened because...', a:['someone got shoved at lunch','a group project went bad','[redacted by district]'], c:1, roast:'"...I weep for this generation." — Ms. Yapp'},
+  {q:'POP QUIZ: The mitochondria is...', a:['the plug of the cell','a type of cart','my personal business'], c:0, roast:'the science skeleton looked away in disgust.'},
+  {q:'POP QUIZ: x² + b. Solve for grindset.', a:['profit','x = down bad','7'], c:2, roast:'the calculator autocorrected your answer to "L".'},
+  {q:'POP QUIZ: Shakespeare famously wrote...', a:['the group chat','Romeo & Juliet (ohio remix)','terms & conditions'], c:1, roast:'"to be mid, or not to be mid." — you, apparently'},
+  {q:'POP QUIZ: Photosynthesis is when...', a:['plants secure their bag ☀️','you post a selfie','chloro-WHAT'], c:0, roast:'a plant in the corner visibly wilted.'},
+  {q:'POP QUIZ: The Louisiana Purchase was...', a:['a great deal fr','$15 with student discount','gas station sushi'], c:0, roast:'Thomas Jefferson has logged on. He is disappointed.'},
+];
+const CALLED_QS=[
+  {q:'MS. YAPP: "Define irony. NOW."', a:['selling carts to fund college','uhh... metal-ish?'], c:0, praise:'"...disturbingly correct."', roast:'she wrote your name on the board. in CURSIVE. it\'s over.'},
+  {q:'MR. FELDSPAR: "What is the powerhouse of the ECONOMY?"', a:['small business 🫡','lunch money'], c:0, praise:'he shed one (1) proud tear.', roast:'he assigned you a reflection essay. on reflection.'},
+  {q:'MS. YAPP: "Use \'entrepreneur\' in a sentence."', a:['i am one, respectfully','entrepreneur is when money'], c:0, praise:'the class slow clapped. one kid fainted.', roast:'"entrepreneur is when money" → permanent record.'},
+  {q:'MR. FELDSPAR: "If a train leaves Ohio at 60mph..."', a:['nothing leaves ohio','depends on the fog'], c:0, praise:'"...correct. nothing leaves ohio."', roast:'the train answered before you did.'},
+];
+const NOTE_GOOD=[
+  'intel: "{N} is getting paid friday 💰" — premium customer next break!',
+  'intel: "{N} lost a bet. has to buy SOMETHING" — premium customer next break!',
+];
+const NOTE_TRAP=[
+  'it says "u up?" ... it\'s from MS. YAPP\'S BURNER. it\'s a TRAP.',
+  'the note is just a drawing of you getting ratio\'d. heat rises out of shame.',
+];
+
 // ============================== [PRODUCTS] ==================================
 // 6 parody products. buy = cost at Big Toe, sell = base premium price.
 const PRODUCTS=[
@@ -571,8 +652,12 @@ function invFirstStocked(){ for(const p of PRODUCTS){ if((G.inv[p.id]||0)>0) ret
 
 // ============================== [GAME] ======================================
 const G={
-  screen:'title',            // title | play | summary
+  screen:'title',            // title | story | play | summary
   best: +(localStorage.getItem('fg_best')||0),
+  day: Math.max(1, +(localStorage.getItem('fg_day')||1)),
+  teachers:[], ambients:[],
+  activity:null, actT:6, noteIntel:false, priceMult:1,
+  storyCard:null, principalOverride:null, teacherBustT:0,
   periodIdx:0, periodT:0, ringT:0, ringText:'', ringShake:0,
   cash:0, cashShown:0, cashPop:0, inv:{}, deals:0, busted:0, heat:0,
   price:50,
@@ -588,7 +673,15 @@ const G={
 
 function pushToast(txt,who,dur){ G.toasts.push({txt,who:who||'',t:dur||4.2, born:performance.now(), age:0}); if(G.toasts.length>4)G.toasts.shift(); }
 
+// story card first, then the actual day
 function startDay(){
+  const d=G.day;
+  const s = d<=DAY_STORIES.length ? DAY_STORIES[d-1]
+    : {title:'STILL GRINDING', lines:[pick(STORY_EXTRA), 'Chadwick is still out there. You know what to do.']};
+  G.storyCard={day:d, title:s.title, lines:s.lines};
+  G.screen='story';
+}
+function beginDay(){
   G.screen='play';
   G.periodIdx=0; G.periodT=0; G.ringT=1.6; G.ringText='BRRRRING!'; G.ringShake=1;
   G.cash=0; G.cashShown=0; G.cashPop=0; G.deals=0; G.busted=0; G.heat=0;
@@ -613,13 +706,18 @@ function startDay(){
   G.chadwick=makeActor(29,24,PAL_CHAD);
   G.chadwick.mode='idle'; G.chadwick.name='Chadwick'; G.chadwick.tall=true;
   G.chadwick.quipT=rand(3,6); G.chadwick.target=null; G.chadwick.rag=null; G.chadwick.downT=0; G.chadwick.dealT=0;
+  // V3: story-day modifiers, cast of characters, class activities
+  G.priceMult=1+Math.min(0.3,(G.day-1)*0.06);
+  G.activity=null; G.actT=rand(4,7); G.noteIntel=false;
+  G.principalOverride=null; G.teacherBustT=0;
+  spawnTeachers(); spawnAmbients();
   onPeriodStart();
 }
 function onPeriodStart(){
   const p=PERIODS[G.periodIdx];
   G.ringT=1.7; G.ringText='BRRRRING!'; G.ringShake=1;
   pushToast(pick(PA_LINES),'PA',5);
-  if(p.kind==='class'){ G.lessonIdx=randi(0,TEACHER_LESSONS.length-1); G.lessonT=0; }
+  if(p.kind==='class'){ G.lessonIdx=randi(0,TEACHER_LESSONS.length-1); G.lessonT=0; G.actT=rand(4,7); G.activity=null; }
   if(p.kind==='gym'){ startGym(); }
   else { endGym(); }
   if(p.kind==='end'){ endDay(); return; }
@@ -646,13 +744,15 @@ function spawnCustomer(gymSneak){
   c.hairStyle=randi(0,2); c.pack=pick(CUST_COLORS);
   // ~50% want a specific product
   c.want = Math.random()<0.5 ? pick(PRODUCTS).id : null;
-  c.stealClock=0; c.stealThresh=rand(12,15); c.stolen=false; c.uid=++_uid;
+  c.stealClock=0; c.stealThresh=rand(12,15)-Math.min(4,(G.day-1)*0.8); c.stolen=false; c.uid=++_uid;
+  // note intel: next customer of the break is a premium buyer
+  if(G.noteIntel){ G.noteIntel=false; c.premium=1.4; c.want=c.want||pick(PRODUCTS).id; c.textT=0.2; }
   G.customers.push(c);
   return c;
 }
 
 function performAction(){
-  if(G.dialog||G.shop||G.offer) return; // overlays consume via buttons
+  if(G.dialog||G.shop||G.offer||G.activity) return; // overlays consume via buttons
   const p=PERIODS[G.periodIdx];
   // gym: throw a dodgeball if holding one
   if(p.kind==='gym' && G.holdingBall && !player.rag){ throwBall(); return; }
@@ -703,6 +803,7 @@ function doDeal(cust){
   let price=choice.price;
   if(choice.matched) price=Math.round(price*rand(1.0,1.25));   // premium for exact ask
   else price=Math.round(price*rand(0.85,1.05));
+  price=Math.round(price*(G.priceMult||1)*(cust.premium||1));  // day economy + note intel
   finishDeal(cust, price, seen, choice.id, choice.matched);
 }
 function finishDeal(cust, price, seen, prodId, matched){
@@ -739,11 +840,12 @@ function monitorSeesPlayer(){
   return hasLOS(m.x,m.y,player.x,player.y);
 }
 function busted(){
-  G.busted++; G.bustFlash=1.4; G.shake=Math.max(G.shake,10);
+  G.busted++; G.bustFlash=1.4; G.shake=Math.max(G.shake,10); G.teacherBustT=0;
   let lost=0; for(const p of PRODUCTS){ lost+=G.inv[p.id]||0; G.inv[p.id]=0; }
   const fine=Math.min(G.cash, randi(18,40));
   G.cash-=fine;
-  G.principalMsg=pick(PRINCIPAL_LINES)+'  (lost '+lost+' items + $'+fine+')';
+  G.principalMsg=(G.principalOverride||pick(PRINCIPAL_LINES))+'  (lost '+lost+' items + $'+fine+')';
+  G.principalOverride=null; G.activity=null;
   // respawn at desk seated
   player.x=yourDesk.x; player.y=yourDesk.y+0.85; player.seated=true; player.path=[]; player.rag=null;
   G.heat=32;
@@ -777,7 +879,9 @@ function endDay(){
     chadLine='Chadwick outsold you. He posted about it on LinkedIn. 💼';
   }
   G.dayEndStats={cash:G.cash, deals:G.deals, busted:G.busted, grade:bumped, baseGrade:grade,
-    quip, chadCash:G.chadCash, beatChad, chadLine, snitches:G.snitchFines.slice(), snitchTotal};
+    quip, chadCash:G.chadCash, beatChad, chadLine, snitches:G.snitchFines.slice(), snitchTotal,
+    day:G.day};
+  G.day++; localStorage.setItem('fg_day', G.day);
 }
 
 // ============================== [AI] ========================================
@@ -853,8 +957,8 @@ function updateCustomers(dt){
 
 // soft body collision: NPCs bounce off player with knockback + oof
 function softCollide(){
-  for(const c of G.customers){
-    if(c.rag) continue;
+  for(const c of [...G.customers, ...G.ambients]){
+    if(c.rag || c.state==='sit') continue;
     const d2=dist2(c.x,c.y,player.x,player.y);
     if(d2<0.44*0.44 && d2>0.0001){
       const d=Math.sqrt(d2), nx=(c.x-player.x)/d, ny=(c.y-player.y)/d, push=(0.44-d);
@@ -909,6 +1013,8 @@ function doShove(){
   if(player.rag||player.seated) return;
   const cand=[];
   for(const c of G.customers){ if(!c.rag && c.state!=='ragdoll') cand.push(c); }
+  for(const a of G.ambients){ if(!a.rag) cand.push(a); }
+  for(const t of G.teachers){ if(!t.rag) cand.push(t); }
   if(G.gymOn) for(const k of G.dodgers){ if(!k.rag) cand.push(k); }
   if(G.chadwick && !G.chadwick.rag) cand.push(G.chadwick);
   let best=null,bd=1.7*1.7;
@@ -928,7 +1034,7 @@ function shoveActor(a){
   bigText(isChad?'BONK 🕶️':pick(['OOF','BONK','OOF!','SKKRT']), a.x, a.y-0.2);
   G.shake=Math.max(G.shake, isChad?9:6);
   reactToShove(a);
-  if(!isChad) trackSnitch(a);
+  if(!isChad && !a.teacher) trackSnitch(a);
   shoveConsequences(a, isChad);
 }
 function trackSnitch(a){
@@ -939,7 +1045,7 @@ function trackSnitch(a){
 }
 function reactToShove(src){
   let worldstar=false;
-  for(const c of G.customers){
+  for(const c of [...G.customers, ...G.ambients]){
     if(c===src||c.rag) continue;
     if(dist2(c.x,c.y,src.x,src.y)<3.4*3.4){
       c.react=1.3; c.bubble='💀'; c.bubbleT=1.6;
@@ -949,6 +1055,13 @@ function reactToShove(src){
 }
 function shoveConsequences(a, isChad){
   const p=PERIODS[G.periodIdx];
+  if(a.teacher){
+    // you shoved a TEACHER. there is no coming back from this.
+    G.heat=99; G.teacherBustT=1.35; // 99 not 100: the delayed bust handles it (comedy timing)
+    G.principalOverride='Principal Krunk: "You shoved '+a.name.toUpperCase()+'?! I\'m not mad. I\'m IMPRESSED. Anyway, you\'re done."';
+    pushToast('YOU SHOVED A TEACHER 💀💀💀','',3);
+    return;
+  }
   if(monitorSeesPlayer()){ G.heat=clamp(G.heat+34,0,100); alertMonitor(); pushToast('MONITOR SAW THE SHOVE 😳🚨','',3); }
   const gcell=grid[gi(clamp(Math.floor(player.x),0,MW-1),clamp(Math.floor(player.y),0,MH-1))];
   const inClassroom=(gcell===F_CLASSA||gcell===F_CLASSB);
@@ -981,6 +1094,15 @@ function updateRagdoll(a,dt){
     r.downT-=dt;
     if(r.downT<=0){
       if(a===G.chadwick){ chadwickGetsUp(); a.rag=null; }
+      else if(a.teacher){ // teacher dusts off and returns to post, muttering
+        a.rag=null; a.state='teach';
+        a.path=findPath(a.x,a.y, Math.round(a.def.post.x), Math.round(a.def.post.y)+1); a.pi=0;
+        pushToast(a.name+': "I am UNPAID for this." 😤', a.name, 2.6);
+      }
+      else if(a.ambient){ // ambient kid gets up and resumes wandering
+        a.rag=null; a.state='roam'; a.roamT=0.5; a.scurry=1.4;
+        const s2=pick(HALL_SPOTS); a.path=findPath(a.x,a.y,s2.x,s2.y); a.pi=0;
+      }
       else {
         a.rag=null; a.state='leave'; a.scurry=1.4;
         const exit=pick([{x:3,y:11},{x:29,y:11}]);
@@ -994,6 +1116,8 @@ function updateRagdoll(a,dt){
 }
 function updateRagdolls(dt){
   for(const c of G.customers){ if(c.rag) updateRagdoll(c,dt); }
+  for(const a of G.ambients){ if(a.rag) updateRagdoll(a,dt); }
+  for(const t of G.teachers){ if(t.rag) updateRagdoll(t,dt); }
   if(G.gymOn) for(const k of G.dodgers){ if(k.rag) updateRagdoll(k,dt); }
   // flying sunglasses
   const sf=G.chadwick&&G.chadwick.shadesFly; if(sf){ sf.vz-=30*dt; sf.z+=sf.vz*dt; sf.x+=sf.vx*dt; sf.y+=sf.vy*dt; sf.rot+=sf.vrot*dt; sf.t-=dt; if(sf.z<=0){sf.z=0;sf.vx*=0.5;sf.vy*=0.5;} if(sf.t<=0) G.chadwick.shadesFly=null; }
@@ -1200,6 +1324,148 @@ function checkSupplyPickup(){
 }
 
 // ============================== [UPDATE] ====================================
+// ============================== [V3 SYSTEMS] ================================
+// ---- teachers ----
+function spawnTeachers(){
+  G.teachers=[];
+  for(const td of TEACHERS_DEF){
+    const t=makeActor(td.post.x, td.post.y+0.8, td.pal);
+    t.name=td.name; t.teacher=true; t.def=td; t.hairStyle=td.hairStyle; t.tall=td.tall;
+    t.state='teach'; t.paceT=rand(2,5); t.yellT=rand(6,14); t.uid=++_uid;
+    G.teachers.push(t);
+  }
+}
+function updateTeachers(dt){
+  const p=PERIODS[G.periodIdx];
+  for(const t of G.teachers){
+    if(t.rag) continue;
+    if(t.path && t.pi<t.path.length){ followPath(t,1.5,dt); t.phase+=dt*8; t.moving=true; }
+    else {
+      t.moving=false;
+      t.paceT-=dt;
+      if(t.paceT<=0){ // pace around the front of the room
+        t.paceT=rand(3.5,7);
+        const gx=Math.round(t.def.post.x+rand(-2,2)), gy=Math.round(t.def.post.y)+1+randi(0,1);
+        t.path=findPath(t.x,t.y,gx,gy); t.pi=0;
+      }
+    }
+    if(p.kind==='class'){
+      t.yellT-=dt;
+      if(t.yellT<=0){ t.yellT=rand(12,20); if(Math.random()<0.55) pushToast(pick(t.def.lines),'',3.4); }
+    }
+  }
+}
+// ---- ambient student body ----
+function spawnAmbients(){
+  G.ambients=[];
+  const seats=CLASS_SEATS.slice();
+  for(let i=0;i<AMB_NAMES.length;i++){
+    const sp=pick(HALL_SPOTS);
+    const a=makeActor(sp.x+rand(-0.4,0.4), sp.y+rand(-0.4,0.4),
+      {body:pick(CUST_COLORS),skin:pick(['#f2c9a0','#e0b088','#c98d63','#f5d3b0']),hair:pick(['#2a1c10','#4a3218','#1c1c22','#6b4a26','#8a5a2a']),legs:'#3a3a44'});
+    a.ambient=true; a.name=AMB_NAMES[i];
+    a.seat=seats.splice(randi(0,seats.length-1),1)[0];
+    a.hairStyle=randi(0,2); a.pack=pick(CUST_COLORS);
+    a.state='roam'; a.roamT=rand(0,2); a.chatT=0; a.uid=++_uid;
+    G.ambients.push(a);
+  }
+}
+function updateAmbients(dt){
+  const p=PERIODS[G.periodIdx];
+  const classTime = (p.kind==='class'||p.kind==='gym');
+  for(const a of G.ambients){
+    if(a.rag) continue;
+    if(a.bubbleT>0){ a.bubbleT-=dt; if(a.bubbleT<=0)a.bubble=null; }
+    if(a.oof>0) a.oof-=dt;
+    const spd = a.scurry>0? 4.4 : 2.6;
+    if(a.scurry>0) a.scurry-=dt;
+    if(classTime){
+      if(a.state==='sit'){ a.moving=false; continue; }
+      if(a.state!=='toSeat'){ // head to your assigned desk, nerd
+        a.state='toSeat';
+        a.path=findPath(a.x,a.y, a.seat.x, a.seat.deskY+1); a.pi=0;
+      }
+      const done=followPath(a,spd,dt);
+      if(done){ a.x=a.seat.x; a.y=a.seat.deskY+0.85; a.state='sit'; a.moving=false; a.facing=Math.atan2(-1,0); }
+      else { a.phase+=dt*10; a.moving=true; }
+    } else {
+      if(a.state==='sit'||a.state==='toSeat'){ a.state='roam'; a.roamT=0; a.path=[]; a.pi=0; }
+      if(a.path && a.pi<a.path.length){
+        followPath(a,spd,dt); a.phase+=dt*10; a.moving=true;
+      } else {
+        a.moving=false;
+        a.roamT-=dt;
+        // gossip bubble if paused near another paused kid
+        a.chatT-=dt;
+        if(a.chatT<=0){
+          a.chatT=rand(2,5);
+          for(const b of G.ambients){
+            if(b!==a && !b.moving && !b.rag && dist2(a.x,a.y,b.x,b.y)<2.2*2.2){
+              a.bubble=pick(['🗣️','💀','😹','🤳','📱']); a.bubbleT=1.4; break;
+            }
+          }
+        }
+        if(a.roamT<=0){
+          a.roamT=rand(2.5,6);
+          const s2=pick(HALL_SPOTS);
+          a.path=findPath(a.x,a.y,s2.x,s2.y); a.pi=0;
+        }
+      }
+    }
+  }
+}
+// ---- in-class activities (short comedy minigames while seated) ----
+function startActivity(){
+  const roll=Math.random();
+  if(roll<0.30){ G.activity={type:'quiz', q:pick(QUIZ_QS), t:8, dur:8}; }
+  else if(roll<0.55){ G.activity={type:'called', q:pick(CALLED_QS), t:7, dur:7}; }
+  else if(roll<0.80){ G.activity={type:'awake', taps:0, need:8, t:4.5, dur:4.5}; }
+  else { G.activity={type:'note', t:6, dur:6}; }
+}
+function resolveActivity(msg, dHeat, dCash){
+  G.activity=null;
+  if(msg) pushToast(msg,'',3.2);
+  if(dHeat) G.heat=clamp(G.heat+dHeat,0,100);
+  if(dCash){ G.cash+=dCash; G.cashPop=1; cashFloat((dCash>0?'+$':'-$')+Math.abs(dCash), player.x, player.y-0.2, dCash>0?'#8fe08f':'#ff9a9a'); }
+}
+function updateActivity(dt){
+  const A=G.activity; if(!A) return;
+  A.t-=dt;
+  if(!player.seated){ G.activity=null; return; } // stood up mid-activity: it evaporates
+  if(A.t<=0){
+    if(A.type==='quiz') resolveActivity('time\'s up. you wrote your own name wrong. somehow.', 6, 0);
+    else if(A.type==='called') resolveActivity('you said "uhhhhh" for seven straight seconds.', 8, 0);
+    else if(A.type==='awake'){ bigText('ZZZ 💤', player.x, player.y-0.3); resolveActivity('you snored. LOUDLY. with your whole chest.', 10, 0); }
+    else resolveActivity('the note blew away. mysterious. spooky, even.', 0, 0);
+  }
+}
+function answerQuiz(i){
+  const A=G.activity; if(!A||A.type!=='quiz') return;
+  if(i===A.q.c) resolveActivity('CORRECT ✅ teacher gave you a Lunchable (resale value $6)', -12, 6);
+  else resolveActivity(A.q.roast, 4, 0);
+}
+function answerCalled(i){
+  const A=G.activity; if(!A||A.type!=='called') return;
+  if(i===A.q.c) resolveActivity(A.q.praise+' ✅', -8, 4);
+  else resolveActivity(A.q.roast, 8, 0);
+}
+function tapAwake(){
+  const A=G.activity; if(!A||A.type!=='awake') return;
+  A.taps++;
+  if(A.taps>=A.need) resolveActivity('you look SO engaged. teacher\'s pet arc.', -10, 0);
+}
+function readNote(){
+  const A=G.activity; if(!A||A.type!=='note') return;
+  if(Math.random()<0.55){
+    G.noteIntel=true;
+    resolveActivity(pick(NOTE_GOOD).replace('{N}', pick(CUST_NAMES)), 0, 0);
+  } else resolveActivity(pick(NOTE_TRAP), 8, 0);
+}
+function ignoreNote(){
+  const A=G.activity; if(!A||A.type!=='note') return;
+  resolveActivity('you passed it on unread. academic discipline. boring, but disciplined.', -3, 0);
+}
+
 function update(dt){
   // cash tick-up always
   G.cashShown = Math.abs(G.cashShown-G.cash)<1? G.cash : lerp(G.cashShown,G.cash,0.18);
@@ -1234,6 +1500,18 @@ function update(dt){
   // lesson scroll
   if(p.kind==='class'){ G.lessonT+=dt; if(G.lessonT>4){ G.lessonT=0; G.lessonIdx=(G.lessonIdx+1)%TEACHER_LESSONS.length; } }
 
+  // teacher-shove delayed bust (let the ragdoll land first, for comedy timing)
+  if(G.teacherBustT>0){ G.teacherBustT-=dt; if(G.teacherBustT<=0) busted(); }
+
+  // in-class activity scheduling
+  if(!frozen){
+    if(p.kind==='class' && player.seated && !G.dialog && !G.activity){
+      G.actT-=dt;
+      if(G.actT<=0){ G.actT=rand(9,14); startActivity(); }
+    }
+    updateActivity(dt);
+  }
+
   // heat dynamics
   if(!frozen){
     if(p.kind==='class'){
@@ -1262,6 +1540,7 @@ function update(dt){
   if(!frozen){
     updateMonitor(dt); updateCustomers(dt); updateRagdolls(dt);
     updateChadwick(dt); updateGym(dt); softCollide();
+    updateTeachers(dt); updateAmbients(dt);
     checkSupplyPickup();
   }
 
@@ -1335,7 +1614,7 @@ function drawWorld(){
   // dodgeballs
   for(const b of G.balls){ draws.push({d:b.x+b.y, z:0.4, fn:()=>drawBall(b)}); }
   // actors
-  const actors=[player, G.monitor, G.toe, G.chadwick, G.coach, ...G.customers, ...(G.gymOn?G.dodgers:[])].filter(Boolean);
+  const actors=[player, G.monitor, G.toe, G.chadwick, G.coach, ...G.customers, ...G.ambients, ...G.teachers, ...(G.gymOn?G.dodgers:[])].filter(Boolean);
   for(const a of actors){
     draws.push({d:a.x+a.y-0.01, z:0, shadow:true, a});
     draws.push({d:a.x+a.y, z:0.6, actor:true, a});
@@ -1547,6 +1826,9 @@ function drawHUD(){
   panel(10,10,VW-20,52,'rgba(18,14,30,0.9)','rgba(120,120,160,0.4)');
   ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif'; ctx.textAlign='left';
   ctx.fillText(p.name, 22, 34);
+  const dw=ctx.measureText(p.name).width;
+  ctx.fillStyle='#8aa0ff'; ctx.font='bold 11px sans-serif';
+  ctx.fillText('DAY '+G.day, 22+dw+10, 33);
   const rem=Math.max(0,Math.ceil((p.dur||0)-G.periodT));
   ctx.font='bold 15px sans-serif'; ctx.fillStyle='#ffd24d';
   ctx.textAlign='right'; ctx.fillText(p.kind==='end'?'—':(rem+'s'), VW-24, 30); ctx.textAlign='left';
@@ -1795,13 +2077,90 @@ function drawTitle(){
   ctx.fillText('desktop: WASD move · E/Space action · Q shove', VW/2, VH-22);
   ctx.textAlign='left';
 }
+function drawStory(){
+  const s=G.storyCard; if(!s){ beginDay(); return; }
+  const g0=ctx.createLinearGradient(0,0,0,VH); g0.addColorStop(0,'#191230'); g0.addColorStop(1,'#0c0918');
+  ctx.fillStyle=g0; ctx.fillRect(0,0,VW,VH);
+  const now=performance.now()/1000;
+  ctx.textAlign='center';
+  ctx.fillStyle='#8aa0ff'; ctx.font='bold 15px sans-serif';
+  ctx.fillText('— DAY '+s.day+' —', VW/2, VH*0.16);
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 30px sans-serif';
+  ctx.fillText(s.title, VW/2, VH*0.16+38);
+  // story lines, staggered fade-in reveal
+  const PW=Math.min(VW-44,360), lineH=44;
+  panel((VW-PW)/2, VH*0.26, PW, lineH*s.lines.length+30, 'rgba(20,16,34,0.92)','rgba(140,140,190,0.35)');
+  ctx.font='14px sans-serif';
+  if(G.storyT===undefined||G.storyDay!==s.day){ G.storyT=0; G.storyDay=s.day; }
+  G.storyT=(G.storyT||0)+1/60;
+  for(let i=0;i<s.lines.length;i++){
+    const reveal=clamp(G.storyT*1.6-i*0.55,0,1);
+    if(reveal<=0) continue;
+    ctx.globalAlpha=reveal;
+    ctx.fillStyle= i===s.lines.length-1? '#ffe27a':'#e6e0f2';
+    wrapText(s.lines[i], VW/2, VH*0.26+30+i*lineH, PW-36, 16);
+    ctx.globalAlpha=1;
+  }
+  const pulse=1+Math.sin(now*3)*0.04;
+  const bw=220*pulse, bh=58*pulse;
+  btn(VW/2-bw/2, VH*0.72-bh/2, bw, bh, '🔔 FIRST BELL', ()=>{ G.storyT=undefined; beginDay(); }, '#ff7a3d');
+  ctx.fillStyle='#777'; ctx.font='11px sans-serif';
+  ctx.fillText('best day: $'+G.best, VW/2, VH*0.72+52);
+  ctx.textAlign='left';
+}
+function drawActivity(){
+  const A=G.activity; if(!A) return;
+  const PW=Math.min(VW-36,360), PX=(VW-PW)/2;
+  const frac=clamp(A.t/A.dur,0,1);
+  if(A.type==='awake'){
+    const PY=VH*0.30;
+    panel(PX,PY,PW,150,'rgba(24,18,40,0.97)','#8aa0ff');
+    ctx.fillStyle='#fff'; ctx.font='900 17px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('😴 you\'re CRASHING in class', VW/2, PY+30);
+    ctx.fillStyle='#cfc9e0'; ctx.font='12px sans-serif';
+    ctx.fillText('TAP to stay awake! ('+A.taps+'/'+A.need+')', VW/2, PY+52);
+    ctx.fillStyle='rgba(255,255,255,0.15)'; rr(PX+20,PY+62,PW-40,8,4); ctx.fill();
+    ctx.fillStyle='#ffa53d'; rr(PX+20,PY+62,(PW-40)*frac,8,4); ctx.fill();
+    btn(PX+PW/2-70, PY+80, 140, 52, 'TAP!! 👁️', tapAwake, '#b8505a');
+    ctx.textAlign='left';
+    return;
+  }
+  if(A.type==='note'){
+    const PY=VH*0.30;
+    panel(PX,PY,PW,158,'rgba(24,18,40,0.97)','#ffd24d');
+    ctx.fillStyle='#ffd24d'; ctx.font='900 16px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('📝 a folded note lands on your desk', VW/2, PY+30);
+    ctx.fillStyle='#cfc9e0'; ctx.font='12px sans-serif';
+    ctx.fillText('could be intel. could be a psyop.', VW/2, PY+52);
+    btn(PX+16, PY+72, (PW-44)/2, 50, 'READ 👀', readNote, '#4a5bd6');
+    btn(PX+PW/2+6, PY+72, (PW-44)/2, 50, 'PASS IT ON', ignoreNote, '#555a70');
+    ctx.textAlign='left';
+    return;
+  }
+  // quiz / called-on: question + answer buttons
+  const q=A.q; const isQuiz=A.type==='quiz';
+  const n=q.a.length, bh=44, PY=VH*0.26, PH=86+n*(bh+8);
+  panel(PX,PY,PW,PH,'rgba(24,18,40,0.97)', isQuiz?'#7ec9a8':'#e07db0');
+  ctx.fillStyle= isQuiz?'#7ec9a8':'#f4a6c8'; ctx.font='900 14px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(isQuiz?'📝 POP QUIZ':'🫵 YOU\'VE BEEN CALLED ON', VW/2, PY+24);
+  ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif';
+  wrapText(q.q.replace(/^POP QUIZ: /,''), VW/2, PY+46, PW-36, 16);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; rr(PX+18,PY+64,PW-36,6,3); ctx.fill();
+  ctx.fillStyle='#ffd24d'; rr(PX+18,PY+64,(PW-36)*frac,6,3); ctx.fill();
+  for(let i=0;i<n;i++){
+    btn(PX+16, PY+78+i*(bh+8), PW-32, bh, q.a[i],
+      isQuiz? (ii=>()=>answerQuiz(ii))(i) : (ii=>()=>answerCalled(ii))(i),
+      '#4a5bd6');
+  }
+  ctx.textAlign='left';
+}
 function drawSummary(){
   const g0=ctx.createLinearGradient(0,0,0,VH); g0.addColorStop(0,'#181129'); g0.addColorStop(1,'#0e0b16');
   ctx.fillStyle=g0; ctx.fillRect(0,0,VW,VH);
   const s=G.dayEndStats; if(!s)return;
   ctx.textAlign='center';
   ctx.fillStyle='#ffcf3d'; ctx.font='900 28px sans-serif';
-  ctx.fillText('🔔 FINAL BELL', VW/2, VH*0.11);
+  ctx.fillText('🔔 DAY '+(s.day||'?')+' — FINAL BELL', VW/2, VH*0.11);
   const PW=Math.min(VW-40,360), PX=(VW-PW)/2, PY=VH*0.15;
   panel(PX,PY,PW,264,'rgba(20,16,34,0.95)','rgba(150,150,200,0.4)');
   ctx.fillStyle='#fff'; ctx.font='bold 16px sans-serif';
@@ -1843,6 +2202,7 @@ function render(){
   uiButtons.length=0;
   ctx.fillStyle='#0e0b16'; ctx.fillRect(0,0,VW,VH);
   if(G.screen==='title'){ drawTitle(); }
+  else if(G.screen==='story'){ drawStory(); }
   else if(G.screen==='summary'){ drawSummary(); }
   else {
     // camera shake offsets the world only
@@ -1856,6 +2216,7 @@ function render(){
     g.addColorStop(0,'rgba(255,240,200,0.04)'); g.addColorStop(0.6,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(8,5,18,0.6)');
     ctx.fillStyle=g; ctx.fillRect(0,0,VW,VH);
     drawHUD();
+    drawActivity();
   }
   // consume action + shove edges
   if(actionPress){ actionPress=false; if(G.screen==='play') performAction(); }
@@ -1872,7 +2233,10 @@ function frame(now){
 requestAnimationFrame(frame);
 
 // expose a couple things for headless testing
-window.__FG={G, startDay, player, spawnCustomer, findPath, gi, grid, MW, MH, waitSpots, isFloor, PERIODS, PRODUCTS,
+window.__FG={G, startDay, beginDay, player, spawnCustomer, findPath, gi, grid, MW, MH, waitSpots, isFloor, PERIODS, PRODUCTS,
+  _startActivity:(ty)=>{ if(ty==='quiz')G.activity={type:'quiz',q:QUIZ_QS[0],t:8,dur:8}; else if(ty==='called')G.activity={type:'called',q:CALLED_QS[0],t:7,dur:7}; else if(ty==='awake')G.activity={type:'awake',taps:0,need:8,t:4.5,dur:4.5}; else G.activity={type:'note',t:6,dur:6}; },
+  _answerQuiz:answerQuiz, _tapAwake:tapAwake, _readNote:readNote,
+  _shoveTeacher:()=>{ const t=G.teachers[0]; if(t){ player.x=t.x+0.5; player.y=t.y; doShove(); return t.name; } return 'none'; },
   get monitor(){return G.monitor;}, get toe(){return G.toe;}, get chadwick(){return G.chadwick;},
   _skipTo:(idx)=>{ G.periodIdx=idx-1; advancePeriod(); },
   _shove:()=>doShove(),
