@@ -1,64 +1,1061 @@
 <title>Freshman Grindset</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
-  html, body { width:100%; height:100%; overflow:hidden; background:#12101a; touch-action:none; overscroll-behavior:none; }
-  #wrap { position:fixed; inset:0; overflow:hidden; background:#12101a; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0e0b16; touch-action:none; overscroll-behavior:none; position:fixed; inset:0; }
+  #wrap { position:fixed; inset:0; overflow:hidden; background:#0e0b16; }
   canvas { position:absolute; top:0; left:0; display:block; touch-action:none; }
-  #ui { position:absolute; inset:0; pointer-events:none; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  .noscroll { position:fixed; inset:0; }
 </style>
 
 <div id="wrap">
   <canvas id="c"></canvas>
-  <div id="ui"></div>
 </div>
 
 <script>
 "use strict";
-// ============================================================================
-//  FRESHMAN GRINDSET  -- a parody. stay in school.
-//  One self-contained file. Systems: renderer, entities, ai, schedule, ui.
-// ============================================================================
+/* =============================================================================
+   FRESHMAN GRINDSET  —  a parody. stay in school.
+   One self-contained file. Isometric 2.5D comedy game.
+   Systems in order below:
+     [BOOT]      canvas / DPR / resize
+     [ISO]       projection + box/floor renderer + palettes
+     [INPUT]     pointer joystick + action button + keyboard
+     [MAP]       procedural school grid + furniture + nav
+     [PATH]      BFS pathfinding
+     [ENTITIES]  player + npc actors, character renderer
+     [AI]        customers + hall monitor + big toe
+     [SCHEDULE]  bell periods
+     [GAME]      deals / heat / bust / day summary / persistence
+     [UI]        screens, hud, toasts, dialog, on-screen controls
+     [RENDER]    world composite
+     [LOOP]      update + raf
+   ========================================================================== */
 (function(){
 
-// ---- boot / canvas / DPR ---------------------------------------------------
+// ============================== [BOOT] ======================================
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-let VW = 0, VH = 0, DPR = 1;
-
+let VW=0, VH=0, DPR=1;
 function resize(){
-  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  DPR = Math.min(window.devicePixelRatio||1, 2.5);
   VW = window.innerWidth; VH = window.innerHeight;
-  canvas.width = Math.floor(VW * DPR);
-  canvas.height = Math.floor(VH * DPR);
-  canvas.style.width = VW + 'px';
-  canvas.style.height = VH + 'px';
+  canvas.width = Math.floor(VW*DPR); canvas.height = Math.floor(VH*DPR);
+  canvas.style.width = VW+'px'; canvas.style.height = VH+'px';
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', ()=>setTimeout(resize,120));
 resize();
 
-// ---- main loop -------------------------------------------------------------
-let last = performance.now();
-function frame(now){
-  let dt = (now - last) / 1000;
-  if (dt > 0.05) dt = 0.05; // clamp big gaps
-  last = now;
-  Game.update(dt);
-  Game.render();
-  requestAnimationFrame(frame);
+// small utils
+const rand=(a,b)=>a+Math.random()*(b-a);
+const randi=(a,b)=>Math.floor(rand(a,b+1));
+const pick=(arr)=>arr[Math.floor(Math.random()*arr.length)];
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+const lerp=(a,b,t)=>a+(b-a)*t;
+const dist2=(ax,ay,bx,by)=>{const dx=ax-bx,dy=ay-by;return dx*dx+dy*dy;};
+
+// ============================== [ISO] =======================================
+const TW2=27, TH2=13.5;          // half tile width/height (2:1 iso)
+let camX=0, camY=0;              // world-space camera target (tiles)
+let OX=0, OY=0;                  // screen origin offset (px)
+function updateCam(px,py){
+  camX=lerp(camX,px,0.14); camY=lerp(camY,py,0.14);
+  OX = VW/2 - (camX-camY)*TW2;
+  OY = VH/2 - (camX+camY)*TH2 - 40;
+}
+// world tile (x,y) + pixel elevation z -> screen
+function sx(x,y){ return OX + (x-y)*TW2; }
+function sy(x,y,z){ return OY + (x+y)*TH2 - (z||0); }
+
+// shade a hex color by factor
+function shade(hex,f){
+  const n=parseInt(hex.slice(1),16);
+  let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  r=clamp(Math.round(r*f),0,255); g=clamp(Math.round(g*f),0,255); b=clamp(Math.round(b*f),0,255);
+  return 'rgb('+r+','+g+','+b+')';
+}
+// draw an extruded box. center tile (cx,cy), half extents (hx,hy) in tiles,
+// zBot..zTop pixel elevation. col = base hex (top light, faces darker).
+function box(cx,cy,hx,hy,zBot,zTop,col,glow){
+  const ax=cx-hx, bx=cx+hx, ay=cy-hy, by=cy+hy;
+  // south face (D-C), then east face (B-C), then top
+  const p=ctx;
+  // south / front-left face
+  p.fillStyle=shade(col,0.62);
+  p.beginPath();
+  p.moveTo(sx(ax,by), sy(ax,by,zTop));
+  p.lineTo(sx(bx,by), sy(bx,by,zTop));
+  p.lineTo(sx(bx,by), sy(bx,by,zBot));
+  p.lineTo(sx(ax,by), sy(ax,by,zBot));
+  p.closePath(); p.fill();
+  // east / front-right face
+  p.fillStyle=shade(col,0.80);
+  p.beginPath();
+  p.moveTo(sx(bx,ay), sy(bx,ay,zTop));
+  p.lineTo(sx(bx,by), sy(bx,by,zTop));
+  p.lineTo(sx(bx,by), sy(bx,by,zBot));
+  p.lineTo(sx(bx,ay), sy(bx,ay,zBot));
+  p.closePath(); p.fill();
+  // top face
+  p.fillStyle=glow?glow:col;
+  p.beginPath();
+  p.moveTo(sx(ax,ay), sy(ax,ay,zTop));
+  p.lineTo(sx(bx,ay), sy(bx,ay,zTop));
+  p.lineTo(sx(bx,by), sy(bx,by,zTop));
+  p.lineTo(sx(ax,by), sy(ax,by,zTop));
+  p.closePath(); p.fill();
+}
+// flat floor diamond at z=0
+function floorTile(cx,cy,col,edge){
+  const p=ctx;
+  p.fillStyle=col;
+  p.beginPath();
+  p.moveTo(sx(cx-0.5,cy-0.5), sy(cx-0.5,cy-0.5,0));
+  p.lineTo(sx(cx+0.5,cy-0.5), sy(cx+0.5,cy-0.5,0));
+  p.lineTo(sx(cx+0.5,cy+0.5), sy(cx+0.5,cy+0.5,0));
+  p.lineTo(sx(cx-0.5,cy+0.5), sy(cx-0.5,cy+0.5,0));
+  p.closePath(); p.fill();
+  if(edge){ p.strokeStyle=edge; p.lineWidth=1; p.stroke(); }
+}
+function blobShadow(x,y,r){
+  const p=ctx;
+  p.fillStyle='rgba(20,12,30,0.28)';
+  p.beginPath();
+  p.ellipse(sx(x,y), sy(x,y,0), r*TW2, r*TH2, 0,0,Math.PI*2);
+  p.fill();
 }
 
-// placeholder Game until systems load
-const Game = {
-  update(dt){},
-  render(){
-    ctx.fillStyle = '#12101a';
-    ctx.fillRect(0,0,VW,VH);
+// ============================== [INPUT] =====================================
+const keys={};
+let actionPress=false;      // edge trigger consumed by game
+const joy={active:false,pid:-1,ox:0,oy:0,dx:0,dy:0};
+let actBtnPid=-1;
+const uiButtons=[];         // rebuilt each frame: {x,y,w,h,r,onTap}
+
+function hitButton(px,py){
+  for(let i=uiButtons.length-1;i>=0;i--){
+    const b=uiButtons[i];
+    if(b.r!=null){ if(dist2(px,py,b.x,b.y)<=b.r*b.r){ b.onTap(); return true; } }
+    else if(px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h){ b.onTap(); return true; }
   }
+  return false;
+}
+function actBtnRect(){ const r=Math.min(62,VW*0.13); return {x:VW-r-26, y:VH-r-42, r:r}; }
+
+canvas.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  const px=e.clientX, py=e.clientY;
+  if(hitButton(px,py)) return;
+  if(G.screen!=='play') return;
+  // action button (bottom-right)
+  const ab=actBtnRect();
+  if(dist2(px,py,ab.x,ab.y)<=(ab.r*1.2)*(ab.r*1.2) && px>VW*0.5){
+    actBtnPid=e.pointerId; actionPress=true; return;
+  }
+  if(px<VW*0.5){ // left half = joystick
+    joy.active=true; joy.pid=e.pointerId; joy.ox=px; joy.oy=py; joy.dx=0; joy.dy=0;
+  } else { // right half tap = action
+    actBtnPid=e.pointerId; actionPress=true;
+  }
+},{passive:false});
+canvas.addEventListener('pointermove',e=>{
+  if(e.pointerId===joy.pid && joy.active){
+    e.preventDefault();
+    let dx=e.clientX-joy.ox, dy=e.clientY-joy.oy;
+    const m=Math.hypot(dx,dy), max=48;
+    if(m>max){ dx=dx/m*max; dy=dy/m*max; }
+    joy.dx=dx/max; joy.dy=dy/max;
+  }
+},{passive:false});
+function endPointer(e){
+  if(e.pointerId===joy.pid){ joy.active=false; joy.pid=-1; joy.dx=0; joy.dy=0; }
+  if(e.pointerId===actBtnPid){ actBtnPid=-1; }
+}
+canvas.addEventListener('pointerup',endPointer);
+canvas.addEventListener('pointercancel',endPointer);
+
+window.addEventListener('keydown',e=>{
+  const k=e.key.toLowerCase();
+  keys[k]=true;
+  if(k==='e'||k===' '){ actionPress=true; e.preventDefault(); }
+  if(k==='enter'){ if(G.screen==='title')startDay(); else if(G.screen==='summary')startDay(); }
+});
+window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+
+function inputVector(){
+  let x=0,y=0;
+  if(joy.active){ x=joy.dx; y=joy.dy; }
+  if(keys['a']||keys['arrowleft']) x-=1;
+  if(keys['d']||keys['arrowright']) x+=1;
+  if(keys['w']||keys['arrowup']) y-=1;
+  if(keys['s']||keys['arrowdown']) y+=1;
+  const m=Math.hypot(x,y);
+  if(m>1){ x/=m; y/=m; }
+  // screen vector -> iso world vector (rotate): screen up = world (-1,-1) etc.
+  // convert desired screen dir to world dir
+  const wx=(x/TW2 + y/TH2)/2;
+  const wy=(y/TH2 - x/TW2)/2;
+  const wm=Math.hypot(wx,wy);
+  if(wm>0){ return {x:wx/wm*Math.min(1,m), y:wy/wm*Math.min(1,m), mag:Math.min(1,m)}; }
+  return {x:0,y:0,mag:0};
+}
+
+// ============================== [MAP] =======================================
+const MW=30, MH=25;
+const F_VOID=0, F_HALL=1, F_CLASSA=2, F_CLASSB=3, F_BATH=4, F_JAN=5;
+const grid=new Array(MW*MH).fill(F_VOID);
+const gi=(x,y)=>y*MW+x;
+function setRoom(x0,y0,x1,y1,t){ for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++) grid[gi(x,y)]=t; }
+setRoom(2,2,10,8,F_CLASSA);
+setRoom(19,2,27,8,F_CLASSB);
+setRoom(2,10,27,13,F_HALL);
+setRoom(12,15,20,22,F_BATH);
+setRoom(2,15,8,21,F_JAN);
+// doors (carve floor through walls)
+grid[gi(6,9)]=F_HALL;   // classroom A -> hall
+grid[gi(23,9)]=F_HALL;  // classroom B -> hall
+grid[gi(16,14)]=F_HALL; // hall -> bathroom
+grid[gi(5,14)]=F_HALL;  // hall -> janitor
+
+const isFloor=(x,y)=> x>=0&&y>=0&&x<MW&&y<MH && grid[gi(x,y)]!==F_VOID;
+// walls: solid cells adjacent to a floor cell
+const wallCells=[];
+const sightBlock=new Uint8Array(MW*MH); // walls + full-cell furniture block LOS
+for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){
+  if(!isFloor(x,y)){
+    if(isFloor(x-1,y)||isFloor(x+1,y)||isFloor(x,y-1)||isFloor(x,y+1)){
+      wallCells.push({x,y}); sightBlock[gi(x,y)]=1;
+    }
+  }
+}
+// lockers: flag some hall-facing wall cells for blue coloring
+const lockerSet=new Set();
+for(const w of wallCells){
+  if(w.y===9 && w.x>=3&&w.x<=26 && w.x!==6 && w.x!==23) lockerSet.add(gi(w.x,w.y));
+  if(w.y===14 && (w.x>=17&&w.x<=26)) lockerSet.add(gi(w.x,w.y));
+}
+
+// ---- furniture ----
+// each: {kind,x,y,hx,hy,h,col,cell(bool blocks cell)}
+const furniture=[];
+let yourDesk=null;
+function addFurn(o){ furniture.push(o); if(o.cell){ sightBlock[gi(Math.round(o.x),Math.round(o.y))]|= o.blockSight?1:0; } return o; }
+// classroom A desks (your class)
+for(let r=0;r<3;r++)for(let c=0;c<4;c++){
+  const x=3+c*2, y=3+r*2;
+  const mine=(c===1&&r===1);
+  const d=addFurn({kind:'desk',x,y,hx:0.34,hy:0.34,h:15,col:'#c98b52',cell:true,blockSight:false,mine});
+  if(mine) yourDesk=d;
+}
+// classroom B desks (decor)
+for(let r=0;r<3;r++)for(let c=0;c<4;c++){
+  addFurn({kind:'desk',x:20+c*2,y:3+r*2,hx:0.34,hy:0.34,h:15,col:'#b7833f',cell:true,blockSight:false});
+}
+// bathroom stalls (block sight) + waiting spots
+const waitSpots=[];
+for(let i=0;i<4;i++){
+  const x=13+i*2;
+  addFurn({kind:'stall',x,y:15,hx:0.42,hy:0.42,h:32,col:'#7ec9a8',cell:true,blockSight:true});
+  waitSpots.push({x, y:17, taken:null});
+}
+// sinks along bath left wall
+for(let i=0;i<3;i++) addFurn({kind:'sink',x:12,y:17+i,hx:0.28,hy:0.32,h:14,col:'#e7edf2',cell:false});
+// blackboard sign (north wall classroom A) — purely visual anchor
+const board={x:6,y:1.6};
+// janitor shelves
+addFurn({kind:'shelf',x:3,y:15,hx:0.4,hy:0.3,h:26,col:'#8a6d4a',cell:false});
+addFurn({kind:'shelf',x:7,y:20,hx:0.4,hy:0.3,h:22,col:'#8a6d4a',cell:false});
+
+// nav grid (walkable, minus full-cell furniture)
+const nav=new Uint8Array(MW*MH);
+for(let y=0;y<MH;y++)for(let x=0;x<MW;x++) nav[gi(x,y)]= isFloor(x,y)?1:0;
+for(const f of furniture){ if(f.cell) nav[gi(Math.round(f.x),Math.round(f.y))]=0; }
+// keep your-desk-adjacent cell walkable for sitting approach (south of desk)
+const navWalk=(x,y)=> x>=0&&y>=0&&x<MW&&y<MH && nav[gi(x,y)]===1;
+
+// collision for player circle: sample floor + furniture rects
+function canStand(x,y){
+  if(!isFloor(Math.floor(x),Math.floor(y))) return false;
+  return true;
+}
+function blockedByFurn(x,y,rad){
+  for(const f of furniture){
+    if(!f.cell) continue;
+    const hx=f.hx+rad, hy=f.hy+rad;
+    if(x>f.x-hx&&x<f.x+hx&&y>f.y-hy&&y<f.y+hy) return true;
+  }
+  return false;
+}
+function walkPoint(x,y){ return isFloor(Math.floor(x),Math.floor(y)); }
+
+// move a circle actor with wall+furniture sliding
+function moveActor(a,vx,vy,dt){
+  const rad=0.26;
+  let nx=a.x+vx*dt, ny=a.y+vy*dt;
+  // X axis
+  if(walkPoint(nx+Math.sign(vx)*rad, a.y) && !blockedByFurn(nx,a.y,rad)) a.x=nx;
+  // Y axis
+  if(walkPoint(a.x, ny+Math.sign(vy)*rad) && !blockedByFurn(a.x,ny,rad)) a.y=ny;
+}
+
+// ============================== [PATH] ======================================
+function findPath(sx0,sy0,gx,gy){
+  sx0=clamp(Math.round(sx0),0,MW-1); sy0=clamp(Math.round(sy0),0,MH-1);
+  gx=clamp(Math.round(gx),0,MW-1); gy=clamp(Math.round(gy),0,MH-1);
+  if(!navWalk(gx,gy)){ // find nearest walkable to goal
+    let best=null,bd=1e9;
+    for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){ if(navWalk(x,y)){const d=dist2(x,y,gx,gy); if(d<bd){bd=d;best={x,y};}} }
+    if(best){gx=best.x;gy=best.y;}
+  }
+  const start=gi(sx0,sy0);
+  const prev=new Int32Array(MW*MH).fill(-1);
+  const seen=new Uint8Array(MW*MH);
+  const q=[start]; seen[start]=1; prev[start]=start;
+  const goal=gi(gx,gy); let found=false;
+  const nb=[[1,0],[-1,0],[0,1],[0,-1]];
+  while(q.length){
+    const cur=q.shift();
+    if(cur===goal){found=true;break;}
+    const cx=cur%MW, cy=(cur/MW)|0;
+    for(const[dx,dy]of nb){
+      const x=cx+dx, y=cy+dy;
+      if(x<0||y<0||x>=MW||y>=MH) continue;
+      const ni=gi(x,y);
+      if(seen[ni]||nav[ni]!==1) continue;
+      seen[ni]=1; prev[ni]=cur; q.push(ni);
+    }
+  }
+  if(!found) return [];
+  const path=[]; let c=goal;
+  while(c!==start){ path.push({x:(c%MW)+0.5, y:((c/MW)|0)+0.5}); c=prev[c]; if(c<0)break; }
+  path.reverse();
+  return path;
+}
+// line of sight (walls + stalls block)
+function hasLOS(ax,ay,bx,by){
+  const steps=Math.ceil(Math.hypot(bx-ax,by-ay)*3);
+  for(let i=1;i<steps;i++){
+    const t=i/steps, x=Math.floor(lerp(ax,bx,t)), y=Math.floor(lerp(ay,by,t));
+    if(x<0||y<0||x>=MW||y>=MH) return false;
+    if(sightBlock[gi(x,y)]) return false;
+  }
+  return true;
+}
+
+// ============================== [ENTITIES] ==================================
+function makeActor(x,y,pal){
+  return {x,y,vx:0,vy:0,facing:0,phase:0,moving:false,pal, path:[],pi:0, oof:0};
+}
+// palettes
+const PAL_PLAYER={body:'#4a5bd6',body2:'#3646b0',skin:'#f2c9a0',hair:'#3a2a1a',legs:'#2b3350'};
+const PAL_MONITOR={body:'#cdb968',skin:'#f0c39a',hair:'#5a3d22',legs:'#7a6b3a',sash:'#ff7a3d'};
+const PAL_TOE={body:'#33384a',skin:'#d8a97e',hair:'#1c1c22',legs:'#22242e'};
+const CUST_COLORS=['#e8657f','#57b7c9','#8fbf54','#e0a13f','#a06fd0','#e07f45','#5fc79a','#d95fb0'];
+
+const player=makeActor(yourDesk.x, yourDesk.y+1, PAL_PLAYER);
+player.seated=false;
+
+// draw a blocky character at its foot position
+function drawActor(a){
+  const bob = a.moving? Math.abs(Math.sin(a.phase*2))*2.5 : 0;
+  const pal=a.pal;
+  // facing -> leg swing axis (use world facing vector components)
+  const fx=Math.cos(a.facing), fy=Math.sin(a.facing);
+  const swing = a.moving? Math.sin(a.phase*2)*0.13 : 0;
+  // legs (two)
+  const lx=fy*0.12, ly=-fx*0.12; // perpendicular offset
+  box(a.x+lx+fx*swing, a.y+ly+fy*swing, 0.10,0.10, 0,9, pal.legs);
+  box(a.x-lx-fx*swing, a.y-ly-fy*swing, 0.10,0.10, 0,9, pal.legs);
+  // body
+  box(a.x,a.y,0.24,0.20, 8+bob, 26+bob, pal.body);
+  if(pal.sash){ // hall monitor sash across body
+    ctx.fillStyle=pal.sash;
+    const zx=a.x, zy=a.y;
+    ctx.beginPath();
+    ctx.moveTo(sx(zx-0.24,zy+0.20), sy(zx-0.24,zy+0.20,24+bob));
+    ctx.lineTo(sx(zx+0.24,zy+0.20), sy(zx+0.24,zy+0.20,14+bob));
+    ctx.lineTo(sx(zx+0.24,zy+0.20), sy(zx+0.24,zy+0.20,10+bob));
+    ctx.lineTo(sx(zx-0.24,zy+0.20), sy(zx-0.24,zy+0.20,20+bob));
+    ctx.closePath(); ctx.fill();
+  }
+  // head
+  box(a.x,a.y,0.17,0.15, 26+bob, 39+bob, pal.skin);
+  // hair cap
+  box(a.x,a.y,0.18,0.16, 37+bob, 42+bob, pal.hair);
+  // eyes on south face
+  ctx.fillStyle='#20242e';
+  const ez=32+bob;
+  const eox=0.06;
+  ctx.beginPath();
+  ctx.arc(sx(a.x-eox,a.y+0.15), sy(a.x-eox,a.y+0.15,ez),1.6,0,7); ctx.fill();
+  ctx.beginPath();
+  ctx.arc(sx(a.x+eox,a.y+0.15), sy(a.x+eox,a.y+0.15,ez),1.6,0,7); ctx.fill();
+}
+
+// ============================== [SCHEDULE] ==================================
+const PERIODS=[
+  {name:'PERIOD 1', kind:'class', dur:38},
+  {name:'PASSING', kind:'pass', dur:26},
+  {name:'PERIOD 2', kind:'class', dur:38},
+  {name:'PASSING', kind:'pass', dur:26},
+  {name:'LUNCH', kind:'lunch', dur:40},
+  {name:'PERIOD 3', kind:'class', dur:40},
+  {name:'FINAL BELL', kind:'end', dur:0},
+];
+
+// ============================== [CONTENT] ===================================
+const CUST_NAMES=['Braydenn','Kayleigh-Lynn','Toilet Mike','DJ Locker','Aiden²','Gunnar','Maddisyn','Chad Jr','Big Reef','Skibidi Sam','Ava-Grace','Tyler.exe'];
+const CUST_TEXTS=[
+  'yo u got the stuff 😤',
+  'bruh im NOT ok pull up rn 💨',
+  'meet me by the stalls no cap',
+  'i have $ this time i promise 🙏',
+  'my mom said i can have ONE (1)',
+  'the vibes are low restock me',
+  'i failed the quiz i need it fr',
+  'bathroom. now. bring the sauce',
+  'skibidi rizz me a cart king 👑',
+  'im built different i can handle 2',
+];
+const DEAL_LINES_BUY=[
+  ['pleasure doin bidness 🤝','stay in school lil bro'],
+  ['this gonna get me thru algebra','allegedly'],
+  ['bro youre basically my pharmacist','do not repeat that'],
+  ['gyatt this cart fire 🔥','its literally water vapor'],
+  ['dont tell my sister','she is the principal'],
+];
+const LOWBALL_LINES=['only got like half rn 😬','the economy is rough king','ill venmo u the rest (i wont)','my allowance got GARNISHED'];
+const TEACHER_LESSONS=[
+  'TODAY: WW2, but only the memes',
+  'Photosynthesis: plants also grind 🌱',
+  'Math: if u have 5 carts and 0 morals',
+  'History: the Boston Tea Party was a vibe',
+  'Chemistry: do NOT lick the periodic table',
+  'English: "brb" is not a literary device',
+  'Pop quiz on stuff i never taught you',
+  'The mitochondria is the plug of the cell',
+  'PEMDAS: Please Excuse My Dealer, Aaron',
+  'Cursive is back and it is here to ruin you',
+];
+const PA_LINES=[
+  '📢 the vending machine accepts exact change and respect',
+  '📢 will the owner of a silver scooter, it is on the roof',
+  '📢 reminder: hall passes are a privilege not a personality',
+  '📢 the gym floor is lava until 3rd period',
+  '📢 lost & found now legally a swamp',
+  '📢 Big Toe to the front office. Big Toe. we see you.',
+  '📢 pep rally cancelled due to excessive pep',
+  '📢 today\'s lunch is "mystery" and that is a threat',
+  '📢 do not run in the halls unless being chased (allowed)',
+];
+const PRINCIPAL_LINES=[
+  'Principal Krunk: "In MY day we vaped RESPECT."',
+  'Principal Krunk: "Your parents have been emailed. In Comic Sans."',
+  'Principal Krunk: "This goes on your Permanent Record™."',
+  'Principal Krunk: "Detention? No. Worse. Group project."',
+  'Principal Krunk: "I invented hustling. Sit down."',
+];
+const TOE_LINES=[
+  'Big Toe: "fresh batch. artisanal. locally sourced from ohio."',
+  'Big Toe: "buy 5, feel nothing, thats the deal."',
+  'Big Toe: "i dont do refunds i do vibes."',
+  'Big Toe: "im a senior. ive seen things. mostly this closet."',
+];
+
+// ============================== [GAME] ======================================
+const G={
+  screen:'title',            // title | play | summary
+  best: +(localStorage.getItem('fg_best')||0),
+  periodIdx:0, periodT:0, ringT:0, ringText:'',
+  cash:0, cashShown:0, carts:2, maxCarts:5,
+  deals:0, busted:0, heat:0,
+  price:50, buyPrice:15,
+  toasts:[], lessonIdx:0, lessonT:0, paShown:'',
+  customers:[], monitor:null, toe:null,
+  dialog:null,              // {lines:[], t, ...} comedic exchange overlay
+  shop:false, offer:null,   // lowball offer {cust, price}
+  bustFlash:0, principalMsg:'', dayEndStats:null,
 };
 
+function pushToast(txt,who,dur){ G.toasts.push({txt,who:who||'',t:dur||4.2, born:performance.now()}); if(G.toasts.length>4)G.toasts.shift(); }
+
+function startDay(){
+  G.screen='play';
+  G.periodIdx=0; G.periodT=0; G.ringT=1.6; G.ringText='BRRRRING!';
+  G.cash=0; G.cashShown=0; G.carts=2; G.deals=0; G.busted=0; G.heat=0;
+  G.price=randi(44,58); G.buyPrice=randi(13,17);
+  G.toasts=[]; G.customers=[]; G.dialog=null; G.shop=false; G.offer=null;
+  G.bustFlash=0; G.dayEndStats=null;
+  for(const s of waitSpots) s.taken=null;
+  // reset player at your desk, seated
+  player.x=yourDesk.x; player.y=yourDesk.y+0.85; player.seated=false; player.path=[];
+  // monitor spawns in far hall
+  G.monitor=makeActor(25,11.5,PAL_MONITOR);
+  G.monitor.mode='patrol'; G.monitor.wp=0; G.monitor.think=0; G.monitor.repath=0; G.monitor.lostT=0;
+  G.toe=makeActor(5,17,PAL_TOE);
+  onPeriodStart();
+}
+function onPeriodStart(){
+  const p=PERIODS[G.periodIdx];
+  G.ringT=1.7; G.ringText='BRRRRING!';
+  pushToast(pick(PA_LINES),'PA',5);
+  if(p.kind==='class'){ G.lessonIdx=randi(0,TEACHER_LESSONS.length-1); G.lessonT=0; }
+  if(p.kind==='end'){ endDay(); return; }
+  // spawn customers for breaks
+  if(p.kind==='pass'||p.kind==='lunch'){
+    const n = p.kind==='lunch'? randi(3,4): randi(2,3);
+    for(let i=0;i<n;i++) setTimeout(()=>spawnCustomer(), rand(300,3200));
+  }
+}
+function advancePeriod(){ G.periodIdx++; if(G.periodIdx>=PERIODS.length){endDay();return;} G.periodT=0; onPeriodStart(); }
+
+function spawnCustomer(){
+  if(G.screen!=='play') return;
+  const p=PERIODS[G.periodIdx]; if(!(p.kind==='pass'||p.kind==='lunch')) return;
+  const spot=waitSpots.find(s=>!s.taken); if(!spot) return;
+  const c=makeActor(pick([3,26,14]), 11.5, {body:pick(CUST_COLORS),skin:pick(['#f2c9a0','#e0b088','#c98d63','#f5d3b0']),hair:pick(['#2a1c10','#4a3218','#1c1c22','#6b4a26']),legs:'#3a3a44'});
+  c.name=pick(CUST_NAMES); c.state='in'; c.spot=spot; spot.taken=c;
+  c.path=findPath(c.x,c.y,spot.x,spot.y); c.pi=0; c.wantT=0; c.textT=rand(0.2,1.5); c.texted=false;
+  G.customers.push(c);
+  return c;
+}
+
+function performAction(){
+  if(G.dialog||G.shop||G.offer) return; // overlays consume via buttons
+  if(player.seated){ player.seated=false; return; }
+  const p=PERIODS[G.periodIdx];
+  // 1 deal with nearest waiting customer
+  let cust=null,cd=1.2*1.2;
+  for(const c of G.customers){ if(c.state==='wait'){ const d=dist2(player.x,player.y,c.x,c.y); if(d<cd){cd=d;cust=c;} } }
+  if(cust){ doDeal(cust); return; }
+  // 2 re-up at big toe (breaks only)
+  if((p.kind==='pass'||p.kind==='lunch') && dist2(player.x,player.y,G.toe.x,G.toe.y)<1.5*1.5){ openShop(); return; }
+  // 3 sit at your desk
+  if(dist2(player.x,player.y,yourDesk.x,yourDesk.y)<1.3*1.3){
+    player.seated=true; player.x=yourDesk.x; player.y=yourDesk.y+0.85; player.vx=0; player.vy=0; return;
+  }
+}
+function actionLabel(){
+  if(player.seated) return 'STAND';
+  const p=PERIODS[G.periodIdx];
+  for(const c of G.customers){ if(c.state==='wait'&&dist2(player.x,player.y,c.x,c.y)<1.2*1.2) return 'DEAL 💵'; }
+  if((p.kind==='pass'||p.kind==='lunch')&&dist2(player.x,player.y,G.toe.x,G.toe.y)<1.5*1.5) return 'RE-UP';
+  if(dist2(player.x,player.y,yourDesk.x,yourDesk.y)<1.3*1.3) return p.kind==='class'?'SIT':'SIT';
+  return '·';
+}
+
+function doDeal(cust){
+  if(G.carts<=0){ pushToast('you\'re DRY 😩 re-up at Big Toe','',3); openDialog(cust,['you: bro im all out','('+cust.name+' fake cries)']); freeCustomer(cust,false); return; }
+  const seen = monitorSeesPlayer();
+  // lowball chance
+  if(Math.random()<0.22){
+    G.offer={cust, price: Math.max(10, Math.round(G.price*rand(0.45,0.62))), line:pick(LOWBALL_LINES)};
+    return;
+  }
+  const price = clamp(Math.round(G.price + rand(-7,16)),18,90);
+  finishDeal(cust, price, seen);
+}
+function finishDeal(cust, price, seen){
+  G.cash+=price; G.carts--; G.deals++;
+  const ex=pick(DEAL_LINES_BUY);
+  openDialog(cust,['you: that\'s $'+price+' 💨', cust.name+': '+pick([ex[0],ex[1]])]);
+  if(seen){ G.heat=clamp(G.heat+28,0,100); alertMonitor(); pushToast('the MONITOR saw that deal 😳','',3); }
+  freeCustomer(cust,true);
+}
+function freeCustomer(cust,leaving){
+  if(cust.spot){ cust.spot.taken=null; cust.spot=null; }
+  cust.state='leave';
+  const exit=pick([{x:3,y:11},{x:26,y:11}]);
+  cust.path=findPath(cust.x,cust.y,exit.x,exit.y); cust.pi=0; cust.despawnT=6;
+}
+function openDialog(who,lines){ G.dialog={who,lines,t:2.6}; }
+function openShop(){ G.shop=true; }
+function buyCart(){ if(G.carts<G.maxCarts && G.cash>=G.buyPrice){ G.cash-=G.buyPrice; G.carts++; } }
+
+function alertMonitor(){ const m=G.monitor; m.mode='chase'; m.lostT=0; m.repath=0; }
+function monitorSeesPlayer(){
+  const m=G.monitor; if(!m||player.seated) return false;
+  const d2=dist2(m.x,m.y,player.x,player.y);
+  if(d2>6.2*6.2) return false;
+  const ang=Math.atan2(player.y-m.y, player.x-m.x);
+  let da=Math.abs(((ang-m.facing+Math.PI*3)%(Math.PI*2))-Math.PI);
+  if(m.mode==='chase') { if(d2<2.5*2.5) return true; } // close range wide awareness while chasing
+  if(da>0.85) return false;
+  return hasLOS(m.x,m.y,player.x,player.y);
+}
+function busted(){
+  G.busted++; G.bustFlash=1.4;
+  const lost=G.carts; G.carts=0;
+  const fine=Math.min(G.cash, randi(18,40));
+  G.cash-=fine;
+  G.principalMsg=pick(PRINCIPAL_LINES)+'  (lost '+lost+' carts + $'+fine+')';
+  // respawn at desk seated
+  player.x=yourDesk.x; player.y=yourDesk.y+0.85; player.seated=true; player.path=[];
+  G.heat=32;
+  const m=G.monitor; m.mode='patrol'; m.x=25; m.y=11.5; m.path=[]; m.lostT=0;
+}
+// V2 stub — comedic shove/ragdoll. no button yet.
+function shoveNPC(a,fromx,fromy){ /* TODO V2: full bully/ragdoll */ }
+
+function endDay(){
+  G.screen='summary';
+  if(G.cash>G.best){ G.best=G.cash; localStorage.setItem('fg_best',G.best); }
+  // letter grade
+  const score=G.cash - G.busted*22 + G.deals*4;
+  let grade,quip;
+  if(score>=340){grade='S';quip='Certified Hustler — see the guidance counselor immediately';}
+  else if(score>=240){grade='A';quip='honor roll of the streets (hallways)';}
+  else if(score>=160){grade='B';quip='solid grind, needs to lock in';}
+  else if(score>=90){grade='C';quip='the vibes were mid tbh';}
+  else if(score>=30){grade='D';quip='did you even come to school';}
+  else {grade='F';quip='respectfully, cook a full meal';}
+  G.dayEndStats={cash:G.cash, deals:G.deals, busted:G.busted, grade, quip};
+}
+
+// ============================== [AI] ========================================
+function faceTo(a,tx,ty){ a.facing=Math.atan2(ty-a.y,tx-a.x); }
+function followPath(a,spd,dt){
+  if(a.pi>=a.path.length){ a.moving=false; return true; }
+  const wp=a.path[a.pi];
+  const dx=wp.x-a.x, dy=wp.y-a.y, m=Math.hypot(dx,dy);
+  if(m<0.12){ a.pi++; return a.pi>=a.path.length; }
+  const vx=dx/m*spd, vy=dy/m*spd;
+  faceTo(a,wp.x,wp.y);
+  moveActor(a,vx,vy,dt);
+  a.moving=true; a.phase+=dt*10;
+  return false;
+}
+const MON_WP=[{x:4,y:11.5},{x:14,y:11.5},{x:25,y:11.5},{x:16,y:18},{x:14,y:11.5}];
+function updateMonitor(dt){
+  const m=G.monitor; if(!m) return;
+  const p=PERIODS[G.periodIdx];
+  const spd=3.6*1.12;
+  // detection: dealing seen handled elsewhere; here catch "out of class in class time" or line of sight on suspicious player
+  const classtime = p.kind==='class';
+  const playerBad = !player.seated && classtime; // skipping class
+  if(m.mode!=='chase' && monitorSeesPlayer() && (playerBad || G.heat>60)){
+    alertMonitor(); pushToast(pick(['HALL MONITOR: "HALL PASS?!"','HALL MONITOR: "FRESHMAN DETECTED"','HALL MONITOR: "I have a SASH"']),'',2.6);
+    G.heat=clamp(G.heat+14,0,100);
+  }
+  if(m.mode==='chase'){
+    m.repath-=dt;
+    if(m.repath<=0){ m.path=findPath(m.x,m.y,player.x,player.y); m.pi=0; m.repath=0.35; }
+    followPath(m, spd, dt);
+    // caught?
+    if(!player.seated && dist2(m.x,m.y,player.x,player.y)<0.62*0.62){ busted(); return; }
+    // lost sight?
+    if(monitorSeesPlayer() || player.seated){ m.lostT= player.seated?m.lostT+dt: 0; }
+    else m.lostT+=dt;
+    if(player.seated) m.lostT+=dt;
+    if(m.lostT>3.4){ m.mode='patrol'; m.wp=0; }
+  } else {
+    // patrol loop
+    if(m.pi>=m.path.length){
+      const t=MON_WP[m.wp%MON_WP.length]; m.wp++;
+      m.path=findPath(m.x,m.y,t.x,t.y); m.pi=0;
+    }
+    followPath(m, 2.5, dt);
+  }
+  if(G.heat>=100 && !player.seated){ busted(); }
+}
+function updateCustomers(dt){
+  for(let i=G.customers.length-1;i>=0;i--){
+    const c=G.customers[i];
+    if(c.state==='in'){
+      const done=followPath(c,3.0,dt);
+      if(done){ c.state='wait'; c.moving=false; if(!c.texted){ c.texted=true; } }
+      // text on the way
+      if(!c.texted){ c.textT-=dt; if(c.textT<=0){ c.texted=true; pushToast(pick(CUST_TEXTS), c.name); } }
+    } else if(c.state==='wait'){
+      c.moving=false; c.wantT+=dt;
+      faceTo(c, player.x, player.y);
+      if(!c.texted){ c.texted=true; pushToast(pick(CUST_TEXTS), c.name); }
+    } else if(c.state==='leave'){
+      const done=followPath(c,3.2,dt);
+      c.despawnT-=dt;
+      if(done||c.despawnT<=0){ if(c.spot)c.spot.taken=null; G.customers.splice(i,1); }
+    }
+  }
+}
+
+// soft body collision: NPCs bounce off player with knockback + oof
+function softCollide(){
+  for(const c of G.customers){
+    const d2=dist2(c.x,c.y,player.x,player.y);
+    if(d2<0.44*0.44 && d2>0.0001){
+      const d=Math.sqrt(d2), nx=(c.x-player.x)/d, ny=(c.y-player.y)/d, push=(0.44-d);
+      if(walkPoint(c.x+nx*push,c.y+ny*push)){ c.x+=nx*push; c.y+=ny*push; }
+      if(c.oof<=0){ c.oof=0.6; pushToast('“oof”', c.name||'', 1.2); }
+    }
+    if(c.oof>0) c.oof-=1/60;
+  }
+}
+
+// ============================== [UPDATE] ====================================
+function update(dt){
+  // cash tick-up always
+  G.cashShown = Math.abs(G.cashShown-G.cash)<1? G.cash : lerp(G.cashShown,G.cash,0.18);
+  if(G.screen!=='play'){ return; }
+
+  // dialog / overlay timers
+  if(G.dialog){ G.dialog.t-=dt; if(G.dialog.t<=0)G.dialog=null; }
+  if(G.bustFlash>0)G.bustFlash-=dt;
+  // toasts
+  for(let i=G.toasts.length-1;i>=0;i--){ G.toasts[i].t-=dt; if(G.toasts[i].t<=0)G.toasts.splice(i,1); }
+
+  // freeze world while shop/offer open (still render)
+  const frozen = G.shop || G.offer;
+
+  // schedule
+  if(!frozen){
+    if(G.ringT>0) G.ringT-=dt;
+    G.periodT+=dt;
+    const p=PERIODS[G.periodIdx];
+    if(p.kind!=='end' && G.periodT>=p.dur){ advancePeriod(); }
+  }
+  const p=PERIODS[G.periodIdx];
+
+  // lesson scroll
+  if(p.kind==='class'){ G.lessonT+=dt; if(G.lessonT>4){ G.lessonT=0; G.lessonIdx=(G.lessonIdx+1)%TEACHER_LESSONS.length; } }
+
+  // heat dynamics
+  if(!frozen){
+    if(p.kind==='class'){
+      if(player.seated) G.heat=clamp(G.heat-9*dt,0,100);
+      else G.heat=clamp(G.heat+3.5*dt,0,100);
+    } else {
+      G.heat=clamp(G.heat-3*dt,0,100);
+    }
+  }
+
+  // player movement
+  if(!frozen && !player.seated){
+    const v=inputVector();
+    const spd=3.6;
+    // momentum / slide
+    const tx=v.x*spd, ty=v.y*spd;
+    player.vx=lerp(player.vx,tx,0.22); player.vy=lerp(player.vy,ty,0.22);
+    const sp=Math.hypot(player.vx,player.vy);
+    if(sp>0.05){ moveActor(player,player.vx,player.vy,dt); player.moving=true; player.phase+=dt*11; if(v.mag>0.05)player.facing=Math.atan2(player.vy,player.vx); }
+    else player.moving=false;
+  } else { player.moving=false; player.vx=0; player.vy=0; }
+
+  if(!frozen){ updateMonitor(dt); updateCustomers(dt); softCollide(); }
+
+  updateCam(player.x, player.y);
+}
+
+// ============================== [RENDER] ====================================
+function floorColorFor(t,x,y){
+  const chk=((x+y)&1)===0;
+  switch(t){
+    case F_HALL: return chk?'#c3ccdb':'#b6c0d1';
+    case F_CLASSA: return chk?'#e0cfa4':'#d7c599';
+    case F_CLASSB: return chk?'#d3ddba':'#c9d3ad';
+    case F_BATH: return chk?'#c6e6ea':'#b6dce1';
+    case F_JAN: return chk?'#c3bba7':'#b8b09b';
+  }
+  return '#333';
+}
+function drawWorld(){
+  // floors (painter order by depth)
+  for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){
+    const t=grid[gi(x,y)]; if(t===F_VOID)continue;
+    floorTile(x,y, floorColorFor(t,x,y));
+  }
+  // your-desk highlight ring on floor
+  ctx.strokeStyle='rgba(90,220,190,0.9)'; ctx.lineWidth=2;
+  floorTile(yourDesk.x, yourDesk.y, 'rgba(90,220,190,0.14)', 'rgba(90,220,190,0.6)');
+
+  // collect depth-sorted tall drawables
+  const draws=[];
+  for(const w of wallCells){
+    const locker=lockerSet.has(gi(w.x,w.y));
+    draws.push({d:w.x+w.y, z:1, fn:()=> box(w.x,w.y,0.5,0.5,0,40, locker?'#5a86c9':'#e6e2ef')});
+  }
+  for(const f of furniture){
+    const glow = f.mine? '#ffe27a': null;
+    draws.push({d:f.x+f.y, z:0.5, fn:()=> box(f.x,f.y,f.hx,f.hy,0,f.h,f.col,glow)});
+  }
+  // blackboard box on north wall of class A
+  draws.push({d:board.x+board.y, z:0.4, fn:()=>{ box(board.x,board.y,1.4,0.12,10,34,'#2f4a3a'); }});
+  // shadows + actors
+  const actors=[player, G.monitor, G.toe, ...G.customers].filter(Boolean);
+  for(const a of actors){
+    draws.push({d:a.x+a.y-0.01, z:0, shadow:true, a});
+    draws.push({d:a.x+a.y, z:0.6, actor:true, a});
+  }
+  draws.sort((p,q)=> (p.d-q.d)|| (p.z-q.z));
+  for(const dr of draws){
+    if(dr.shadow){ blobShadow(dr.a.x,dr.a.y,0.34); }
+    else if(dr.actor){ drawActor(dr.a); if(dr.a.state==='wait'){ bubble(dr.a,'💨'); } if(dr.a===G.toe){ bubble(dr.a,'🔌'); } }
+    else dr.fn();
+  }
+  // lesson text on blackboard (billboarded)
+  const bx=sx(board.x,board.y), by=sy(board.x,board.y,34);
+  ctx.fillStyle='#eafff2'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
+  wrapText(TEACHER_LESSONS[G.lessonIdx], bx, by-8, 150, 12);
+  ctx.textAlign='left';
+  // monitor vision cone (subtle)
+  drawCone(G.monitor);
+}
+function drawCone(m){
+  if(!m)return;
+  const r=6.2, a=m.facing, spread=0.85;
+  ctx.save();
+  ctx.globalAlpha= m.mode==='chase'?0.18:0.10;
+  ctx.fillStyle= m.mode==='chase'?'#ff4d4d':'#ffd24d';
+  ctx.beginPath();
+  ctx.moveTo(sx(m.x,m.y), sy(m.x,m.y,10));
+  for(let i=-1;i<=1;i+=0.25){
+    const ang=a+spread*i; const px=m.x+Math.cos(ang)*r, py=m.y+Math.sin(ang)*r;
+    ctx.lineTo(sx(px,py), sy(px,py,2));
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function bubble(a,emoji){
+  const bx=sx(a.x,a.y), by=sy(a.x,a.y,52)-2;
+  ctx.font='16px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(emoji,bx,by); ctx.textAlign='left';
+}
+function wrapText(txt,cx,y,maxw,lh){
+  const words=txt.split(' '); let line='',yy=y;
+  const lines=[];
+  for(const w of words){ const test=line?line+' '+w:w; if(ctx.measureText(test).width>maxw&&line){lines.push(line);line=w;}else line=test; }
+  if(line)lines.push(line);
+  yy=y-(lines.length-1)*lh;
+  for(const l of lines){ ctx.fillText(l,cx,yy); yy+=lh; }
+}
+
+// ---------- UI helpers ----------
+function rr(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function panel(x,y,w,h,fill,stroke){ rr(x,y,w,h,14); ctx.fillStyle=fill||'rgba(20,16,32,0.86)'; ctx.fill(); if(stroke){ctx.lineWidth=2;ctx.strokeStyle=stroke;ctx.stroke();} }
+function btn(x,y,w,h,label,onTap,col){
+  rr(x,y,w,h,14); ctx.fillStyle=col||'#4a5bd6'; ctx.fill();
+  rr(x,y,w,h,14); ctx.lineWidth=2; ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.font='bold 16px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(label, x+w/2, y+h/2+1); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  uiButtons.push({x,y,w,h,onTap});
+}
+
+function drawHUD(){
+  const p=PERIODS[G.periodIdx];
+  // top bell schedule bar
+  panel(10,10,VW-20,52,'rgba(18,14,30,0.9)','rgba(120,120,160,0.4)');
+  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif'; ctx.textAlign='left';
+  ctx.fillText(p.name, 22, 34);
+  const rem=Math.max(0,Math.ceil((p.dur||0)-G.periodT));
+  ctx.font='bold 15px sans-serif'; ctx.fillStyle='#ffd24d';
+  ctx.textAlign='right'; ctx.fillText(p.kind==='end'?'—':(rem+'s'), VW-24, 30); ctx.textAlign='left';
+  // progress bar
+  const pw=VW-44, prog=p.dur?clamp(G.periodT/p.dur,0,1):1;
+  ctx.fillStyle='rgba(255,255,255,0.14)'; rr(22,44,pw,8,4); ctx.fill();
+  ctx.fillStyle=p.kind==='class'?'#7ec9a8':'#8aa0ff'; rr(22,44,pw*prog,8,4); ctx.fill();
+
+  // money + carts pill
+  panel(10,70,150,40,'rgba(18,14,30,0.9)');
+  ctx.fillStyle='#8fe08f'; ctx.font='bold 20px sans-serif'; ctx.textAlign='left';
+  ctx.fillText('$'+Math.round(G.cashShown), 22, 97);
+  panel(168,70,96,40,'rgba(18,14,30,0.9)');
+  ctx.fillStyle='#fff'; ctx.font='bold 17px sans-serif';
+  ctx.fillText('💨 '+G.carts+'/'+G.maxCarts, 180, 97);
+
+  // heat meter (right)
+  const hx=VW-130, hy=70;
+  panel(hx,hy,120,40,'rgba(18,14,30,0.9)');
+  ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.fillText('HEAT', hx+10, hy+16);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; rr(hx+10,hy+22,100,10,5); ctx.fill();
+  const hc = G.heat>66?'#ff4d4d':(G.heat>33?'#ffa53d':'#ffd24d');
+  ctx.fillStyle=hc; rr(hx+10,hy+22,100*G.heat/100,10,5); ctx.fill();
+
+  // seated / class chalk strip
+  if(p.kind==='class' && player.seated){
+    panel(30,120,VW-60,40,'rgba(30,60,44,0.94)','rgba(140,200,160,0.5)');
+    ctx.fillStyle='#eafff2'; ctx.font='italic bold 14px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('📚 '+TEACHER_LESSONS[G.lessonIdx], VW/2, 145); ctx.textAlign='left';
+  } else if(p.kind==='class' && !player.seated){
+    panel(30,120,VW-60,34,'rgba(90,20,30,0.9)','rgba(255,120,120,0.5)');
+    ctx.fillStyle='#ffd9d9'; ctx.font='bold 13px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('⚠ YOU ARE SKIPPING CLASS — get to your desk', VW/2, 142); ctx.textAlign='left';
+  }
+
+  // toasts (phone texts) bottom-left stack
+  let ty=VH-150;
+  for(let i=G.toasts.length-1;i>=0;i--){
+    const t=G.toasts[i]; const w=Math.min(VW-120, 250); const h=44;
+    const alpha=clamp(t.t,0,1);
+    ctx.globalAlpha=0.92*alpha;
+    panel(14,ty-h,w,h,'rgba(28,24,44,0.96)','rgba(120,120,180,0.4)');
+    ctx.fillStyle='#9fd0ff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='left';
+    ctx.fillText((t.who||'📱')+(t.who?' 📱':''), 24, ty-h+18);
+    ctx.fillStyle='#fff'; ctx.font='14px sans-serif';
+    ctx.fillText(t.txt.length>30?t.txt.slice(0,29)+'…':t.txt, 24, ty-h+36);
+    ctx.globalAlpha=1;
+    ty-=h+8;
+  }
+
+  // ring transition
+  if(G.ringT>0){
+    ctx.globalAlpha=clamp(G.ringT,0,1);
+    ctx.fillStyle='#ffcf3d'; ctx.font='900 44px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(G.ringText, VW/2, VH*0.4);
+    ctx.globalAlpha=1; ctx.textAlign='left';
+  }
+
+  // principal bust banner
+  if(G.bustFlash>0){
+    ctx.globalAlpha=clamp(G.bustFlash,0,1);
+    ctx.fillStyle='rgba(120,0,0,0.35)'; ctx.fillRect(0,0,VW,VH);
+    panel(20,VH*0.42,VW-40,90,'rgba(30,10,14,0.96)','#ff5a5a');
+    ctx.fillStyle='#fff'; ctx.font='900 20px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('🚨 BUSTED 🚨', VW/2, VH*0.42+30);
+    ctx.font='13px sans-serif'; ctx.fillStyle='#ffd9d9';
+    wrapUI(G.principalMsg, VW/2, VH*0.42+56, VW-70, 16);
+    ctx.textAlign='left'; ctx.globalAlpha=1;
+  }
+
+  // deal dialog
+  if(G.dialog){
+    panel(20,VH-250,VW-40,72,'rgba(20,16,32,0.96)','rgba(150,150,200,0.5)');
+    ctx.fillStyle='#ffd24d'; ctx.font='bold 13px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('🤝 '+(G.dialog.who.name||'deal'), 34, VH-250+22);
+    ctx.fillStyle='#fff'; ctx.font='13px sans-serif';
+    ctx.fillText(G.dialog.lines[0]||'', 34, VH-250+42);
+    ctx.fillText(G.dialog.lines[1]||'', 34, VH-250+60);
+  }
+
+  // on-screen controls
+  drawControls();
+
+  // shop overlay
+  if(G.shop) drawShop();
+  // lowball offer overlay
+  if(G.offer) drawOffer();
+}
+function wrapUI(txt,cx,y,maxw,lh){ wrapText(txt,cx,y,maxw,lh); }
+
+function drawControls(){
+  // joystick base
+  if(joy.active){
+    ctx.globalAlpha=0.5;
+    ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.beginPath(); ctx.arc(joy.ox,joy.oy,50,0,7); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(joy.ox+joy.dx*48,joy.oy+joy.dy*48,26,0,7); ctx.fill();
+    ctx.globalAlpha=1;
+  } else {
+    ctx.globalAlpha=0.25; ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('◄ move (drag)', VW*0.25, VH-40); ctx.textAlign='left'; ctx.globalAlpha=1;
+  }
+  // action button
+  const ab=actBtnRect();
+  const lbl=actionLabel();
+  const active=lbl!=='·';
+  ctx.globalAlpha= active?1:0.5;
+  ctx.beginPath(); ctx.arc(ab.x,ab.y,ab.r,0,7);
+  ctx.fillStyle= active? '#ff7a3d':'rgba(120,120,140,0.5)'; ctx.fill();
+  ctx.lineWidth=3; ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(lbl.length>7?lbl.slice(0,7):lbl, ab.x, ab.y); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  ctx.globalAlpha=1;
+}
+function drawShop(){
+  panel(24,VH*0.30,VW-48,220,'rgba(20,16,34,0.98)','#7ec9a8');
+  const x=40,y=VH*0.30;
+  ctx.fillStyle='#fff'; ctx.font='900 20px sans-serif'; ctx.textAlign='left';
+  ctx.fillText('🔌 Big Toe — Re-Up', x, y+34);
+  ctx.font='13px sans-serif'; ctx.fillStyle='#cfc9e0';
+  wrapText(pick.__toe || (pick.__toe=pick(TOE_LINES)), VW/2, y+58, VW-90, 15);
+  ctx.textAlign='left';
+  ctx.fillStyle='#8fe08f'; ctx.font='bold 15px sans-serif';
+  ctx.fillText('Carts $'+G.buyPrice+' each  ·  you: $'+Math.round(G.cash)+'  ·  '+G.carts+'/'+G.maxCarts+' 💨', x, y+92);
+  btn(x, y+108, (VW-96)/2-6, 46, 'BUY 1 (-$'+G.buyPrice+')', ()=>{ buyCart(); }, '#4a5bd6');
+  btn(x+(VW-96)/2+6, y+108, (VW-96)/2-6, 46, 'FILL UP', ()=>{ while(G.carts<G.maxCarts&&G.cash>=G.buyPrice)buyCart(); }, '#3f9d6b');
+  btn(x, y+162, VW-96, 44, 'LEAVE', ()=>{ G.shop=false; pick.__toe=null; }, '#555a70');
+}
+function drawOffer(){
+  const o=G.offer;
+  panel(24,VH*0.34,VW-48,180,'rgba(20,16,34,0.98)','#ffa53d');
+  const x=40,y=VH*0.34;
+  ctx.fillStyle='#ffd24d'; ctx.font='900 18px sans-serif'; ctx.textAlign='left';
+  ctx.fillText('💸 Lowball from '+o.cust.name, x, y+32);
+  ctx.fillStyle='#fff'; ctx.font='14px sans-serif';
+  wrapText('"'+o.line+'"  — offers $'+o.price+' (you wanted ~$'+G.price+')', VW/2, y+62, VW-90, 16);
+  ctx.textAlign='left';
+  btn(x, y+90, (VW-96)/2-6, 46, 'TAKE $'+o.price, ()=>{ const c=o.cust; G.offer=null; finishDeal(c,o.price, monitorSeesPlayer()); }, '#3f9d6b');
+  btn(x+(VW-96)/2+6, y+90, (VW-96)/2-6, 46, 'DECLINE 🙅', ()=>{ const c=o.cust; G.offer=null; openDialog(c,['you: absolutely not','('+c.name+' storms off)']); freeCustomer(c,false); }, '#b8505a');
+}
+
+function drawTitle(){
+  ctx.fillStyle='#141024'; ctx.fillRect(0,0,VW,VH);
+  // decorative iso tiles behind
+  ctx.save(); OX=VW/2; OY=VH*0.30;
+  for(let y=0;y<5;y++)for(let x=0;x<5;x++){ floorTile(x,y, ((x+y)&1)?'#2a2440':'#231e38'); }
+  ctx.restore();
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 40px sans-serif';
+  ctx.fillText('FRESHMAN', VW/2, VH*0.30);
+  ctx.fillStyle='#7ec9a8'; ctx.font='900 46px sans-serif';
+  ctx.fillText('GRINDSET', VW/2, VH*0.30+48);
+  ctx.fillStyle='#cfc9e0'; ctx.font='italic 15px sans-serif';
+  ctx.fillText('rise & grind, 3rd period edition 💨', VW/2, VH*0.30+82);
+  ctx.fillStyle='#8fe08f'; ctx.font='bold 14px sans-serif';
+  ctx.fillText('best day: $'+G.best, VW/2, VH*0.30+110);
+  btn(VW/2-90, VH*0.55, 180, 60, '▶ PLAY', ()=>startDay(), '#ff7a3d');
+  ctx.fillStyle='#777'; ctx.font='11px sans-serif';
+  ctx.fillText('a parody. stay in school.', VW/2, VH-40);
+  ctx.fillStyle='#666'; ctx.font='11px sans-serif';
+  ctx.fillText('desktop: WASD move · E/Space action', VW/2, VH-22);
+  ctx.textAlign='left';
+}
+function drawSummary(){
+  ctx.fillStyle='#141024'; ctx.fillRect(0,0,VW,VH);
+  const s=G.dayEndStats; if(!s)return;
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 28px sans-serif';
+  ctx.fillText('🔔 FINAL BELL', VW/2, VH*0.16);
+  panel(28,VH*0.22,VW-56,200,'rgba(20,16,34,0.95)','rgba(150,150,200,0.4)');
+  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+  ctx.fillText('Cash earned: $'+s.cash, VW/2, VH*0.22+40);
+  ctx.fillText('Deals closed: '+s.deals+' 💨', VW/2, VH*0.22+70);
+  ctx.fillText('Times busted: '+s.busted+' 🚨', VW/2, VH*0.22+100);
+  ctx.fillStyle='#8fe08f'; ctx.font='900 54px sans-serif';
+  ctx.fillText(s.grade, VW/2, VH*0.22+165);
+  ctx.fillStyle='#cfc9e0'; ctx.font='italic 13px sans-serif';
+  wrapText('Business grade: "'+s.quip+'"', VW/2, VH*0.22+192, VW-90, 16);
+  ctx.fillStyle='#8fe08f'; ctx.font='bold 14px sans-serif';
+  ctx.fillText('best day: $'+G.best, VW/2, VH*0.62);
+  btn(VW/2-100, VH*0.68, 200, 58, '▶ NEXT DAY', ()=>startDay(), '#ff7a3d');
+  ctx.textAlign='left';
+}
+
+function render(){
+  uiButtons.length=0;
+  ctx.fillStyle='#0e0b16'; ctx.fillRect(0,0,VW,VH);
+  if(G.screen==='title'){ drawTitle(); }
+  else if(G.screen==='summary'){ drawSummary(); }
+  else {
+    drawWorld();
+    // vignette
+    const g=ctx.createRadialGradient(VW/2,VH/2,VH*0.3, VW/2,VH/2,VH*0.75);
+    g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(10,6,20,0.55)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,VW,VH);
+    drawHUD();
+  }
+  // consume action edge
+  if(actionPress){ actionPress=false; if(G.screen==='play') performAction(); }
+}
+
+// ============================== [LOOP] ======================================
+let last=performance.now();
+function frame(now){
+  let dt=(now-last)/1000; if(dt>0.05)dt=0.05; last=now;
+  try{ update(dt); render(); }catch(err){ console.error('FRAME ERROR', err); }
+  requestAnimationFrame(frame);
+}
 requestAnimationFrame(frame);
+
+// expose a couple things for headless testing
+window.__FG={G, startDay, player, spawnCustomer};
+
 })();
 </script>
