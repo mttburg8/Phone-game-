@@ -1,0 +1,64 @@
+<title>Freshman Grindset</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#12101a; touch-action:none; overscroll-behavior:none; }
+  #wrap { position:fixed; inset:0; overflow:hidden; background:#12101a; }
+  canvas { position:absolute; top:0; left:0; display:block; touch-action:none; }
+  #ui { position:absolute; inset:0; pointer-events:none; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .noscroll { position:fixed; inset:0; }
+</style>
+
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="ui"></div>
+</div>
+
+<script>
+"use strict";
+// ============================================================================
+//  FRESHMAN GRINDSET  -- a parody. stay in school.
+//  One self-contained file. Systems: renderer, entities, ai, schedule, ui.
+// ============================================================================
+(function(){
+
+// ---- boot / canvas / DPR ---------------------------------------------------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let VW = 0, VH = 0, DPR = 1;
+
+function resize(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  VW = window.innerWidth; VH = window.innerHeight;
+  canvas.width = Math.floor(VW * DPR);
+  canvas.height = Math.floor(VH * DPR);
+  canvas.style.width = VW + 'px';
+  canvas.style.height = VH + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', ()=>setTimeout(resize,120));
+resize();
+
+// ---- main loop -------------------------------------------------------------
+let last = performance.now();
+function frame(now){
+  let dt = (now - last) / 1000;
+  if (dt > 0.05) dt = 0.05; // clamp big gaps
+  last = now;
+  Game.update(dt);
+  Game.render();
+  requestAnimationFrame(frame);
+}
+
+// placeholder Game until systems load
+const Game = {
+  update(dt){},
+  render(){
+    ctx.fillStyle = '#12101a';
+    ctx.fillRect(0,0,VW,VH);
+  }
+};
+
+requestAnimationFrame(frame);
+})();
+</script>
