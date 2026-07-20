@@ -187,7 +187,7 @@ window.addEventListener('keydown',e=>{
   keys[k]=true;
   if(k==='e'||k===' '){ actionPress=true; e.preventDefault(); }
   if(k==='q'){ shovePress=true; e.preventDefault(); }
-  if(k==='enter'){ if(G.screen==='title')startDay(); else if(G.screen==='summary')startDay(); else if(G.screen==='story')beginDay(); }
+  if(k==='enter'){ if(G.screen==='title')startDay(); else if(G.screen==='summary')afterSummary(); else if(G.screen==='story')beginDay(); else if(G.screen==='actintro')showDayStory(); }
 });
 window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
 
@@ -669,15 +669,270 @@ const G={
   bills:[], floats:[], puffs:[], fogs:[], balls:[],
   shake:0, holdingBall:false, snitchList:{}, snitchFines:[],
   supplyTaken:false, coachNoticed:0,
+  camp:null, missionObjective:null, campCloutToday:0,
 };
+
+// ============================== [CAMPAIGN] ==================================
+// "RISE & GRIND" — 4-act story campaign layered on top of the daily loop.
+// Persisted separately from fg_day/fg_best so old saves keep working untouched.
+const CAMP_KEY='fg_campaign';
+const CLOUT_PER_PCT=10;      // 10 clout ≈ 1% school control
+const ACT_GATE=[null,25,50,75,100]; // control % needed to clear act 1..4
+const BUST_CAUTIONARY=7;     // campaign-wide busts that trigger the Cautionary Tale ending
+
+function loadCampaign(){
+  let c=null;
+  try{ c=JSON.parse(localStorage.getItem(CAMP_KEY)||'null'); }catch(e){ c=null; }
+  if(!c || typeof c!=='object') c={};
+  c.act = c.act||1;
+  c.actDay = c.actDay||1;
+  c.clout = c.clout||0;
+  c.control = clamp(Math.round(c.clout/CLOUT_PER_PCT),0,100);
+  c.brand = c.brand||null;               // MUSCLE | CHARM | GHOST
+  c.flags = c.flags||{};                 // {chad:'ally'|'nemesis'|'broken', krunk:'paid'|'owned'|'war'}
+  c.notoriety = c.notoriety||0;
+  c.endingsSeen = c.endingsSeen||[];
+  c.stats = c.stats||{};
+  c.stats.busts = c.stats.busts||0;
+  c.stats.teacherShoves = c.stats.teacherShoves||0;
+  c.stats.actBeatChad = c.stats.actBeatChad||[false,false,false,false];
+  c.stats.totalCash = c.stats.totalCash||0;
+  c.stats.totalDeals = c.stats.totalDeals||0;
+  c.lastIntroAct = c.lastIntroAct||0;
+  c.pendingTransition = c.pendingTransition||null;
+  return c;
+}
+function saveCampaign(){ if(!G.camp) return; try{ localStorage.setItem(CAMP_KEY, JSON.stringify(G.camp)); }catch(e){} }
+function addClout(amt, why){
+  if(!G.camp || !amt) return;
+  G.camp.clout=Math.max(0, G.camp.clout+amt);
+  G.camp.control=clamp(Math.round(G.camp.clout/CLOUT_PER_PCT),0,100);
+  G.campCloutToday=(G.campCloutToday||0)+amt;
+  if(G.screen==='play') pushToast((amt>0?'📈 +':'💀 ')+amt+' CLOUT'+(why?' — '+why:''), '', 2.2);
+  saveCampaign();
+}
+function brandLine(map, fallback){
+  const b=G.camp&&G.camp.brand;
+  if(b && map[b]) return map[b];
+  return fallback!==undefined?fallback:(map.DEFAULT||'');
+}
+function flagLine(flagName, map, fallback){
+  const v=G.camp && G.camp.flags[flagName];
+  if(v && map[v]) return map[v];
+  return fallback!==undefined?fallback:(map.DEFAULT||'');
+}
+function brandDealMult(){
+  const b=G.camp&&G.camp.brand;
+  if(b==='MUSCLE') return 1.08;   // shoves-first energy nudges prices up
+  if(b==='CHARM') return 1.06;    // out-talk, out-hustle
+  return 1;
+}
+function heatMult(){ return (G.camp&&G.camp.brand==='GHOST')?0.75:1; } // ghost brand: lower heat gain
+function notorietyBoost(){
+  if(!G.camp||G.camp.act<3) return 0;
+  return clamp((G.camp.notoriety||0)/100,0,1)*0.35; // modest Act3+ monitor pressure bump
+}
+
+// ---- mission days (day 5 of each act) ----
+const MISSION_DEFS=[null,
+  {name:'THE BAKE SALE WAR', emoji:'🧁', obj:'out-sell the "bake sale" — hit $150 cash by final bell',
+   check:(s)=>s.cash>=150, winLine:'You out-hustled a folding table full of gluten-free lies. 🧁💰', loseLine:'The bake sale won. A BAKE SALE. Beaten by a lemon bar.'},
+  {name:'THE SHOWDOWN', emoji:'⚔️', obj:'out-earn Chadwick in the cafeteria before the bell',
+   check:(s)=>s.cash>s.chadCash, winLine:'Cafeteria showdown: YOU. Chadwick is filing a complaint with HR (there is no HR).', loseLine:'Chadwick out-sold you in his own arena. He is insufferable now.'},
+  {name:'THE LOCKER SWEEP', emoji:'🔍', obj:'survive the sweep — zero busts today',
+   check:(s)=>s.busted===0, winLine:'Every locker searched. Nothing found. You are basically a ghost with a backpack.', loseLine:'They found the stash. Krunk gave a whole speech about it.'},
+  {name:'THE GRINDSET GAMES', emoji:'🏆', obj:'push CONTROL to 100% before the final bell',
+   check:(s,camp)=>camp.control>=100, winLine:'You own the school. Every wing. Every locker. Every vending machine.', loseLine:'So close. The school remains, technically, not fully yours. Yet.'},
+];
+
+// ---- act content: intro card + 5 flavor-day cards (day 5 = mission day) ----
+const ACT_DEFS=[null,
+  { name:'NEW KID ENERGY',
+    intro:()=>['Fresh meat. New backpack. A crushing sense of financial doom.',
+      'Nobody here knows your name yet. That is extremely fixable.',
+      'Learn the halls, dodge the hall monitor, and start building a name for yourself.'],
+    days: DAY_STORIES },
+  { name:'COLD WAR',
+    intro:()=>['Winter break didn\'t happen because school doesn\'t stop for feelings.',
+      brandLine({MUSCLE:'Word is out that you shove first and negotiate never. Respect, mostly.', CHARM:'Word is out that you could sell a fire extinguisher to a burning building.', GHOST:'Word is out that you might not even be real. Legend status: pending.'}),
+      'Chadwick noticed. Chadwick has assembled a CREW. Chadwick has a LinkedIn banner now.'],
+    days:[
+      ()=>({title:'THE COLD FRONT', lines:["Winter arrives. So does Chadwick's crew — four kids in matching windbreakers.",
+        "They call themselves \"The Portfolio.\" Nobody asked.",
+        brandLine({MUSCLE:'They see you coming and visibly reconsider their life choices.', CHARM:'They try to out-talk you. It does not go well for them.', GHOST:'They can never quite remember what you look like. Perfect.'},'Business as usual, but with more group intimidation and worse fashion.')]}),
+      {title:'CAFETERIA POLITICS', lines:["The lunch line now has a suggested waiting area AND a black market.",
+        "Rumor: the cafeteria is about to become a real sales floor. Rumor: everything.",
+        "Sell hard during lunch. Chadwick will be doing the exact same thing, loudly."]},
+      {title:'RUMOR MILL', lines:["Someone told the hall monitor you \"run the whole east wing.\" You do not. Yet.",
+        "Your heat is up for no reason except vibes and slander.",
+        "Chadwick smiles a lot today. Chadwick is never this happy without a reason."]},
+      {title:'THE FAKE CUSTOMER', lines:["A kid wearing sunglasses indoors tried to buy from you using Monopoly money.",
+        "You're 90% sure Chadwick sent him. You're 100% sure it was funny.",
+        "Stay sharp. Not every customer is a customer."]},
+      ()=>({title:'THE SHOWDOWN', lines:["The cafeteria goes silent. Chadwick sets up a card table. You don't have a table.",
+        "Doesn't matter. This is a sales-off, table or no table.",
+        "Whoever's holding more cash when the bell rings runs this school's lunch period. Forever. Or at least until next semester."]}) ],
+  },
+  { name:'THE ADMINISTRATION',
+    intro:()=>['You\'re too big to ignore now. The FACULTY have opinions about you.',
+      flagLine('chad', {ally:'Chadwick rides with you now. Two grindsets, one backpack economy.', nemesis:'Chadwick is still out there, plotting, laminating things.', broken:'Chadwick\'s old crew works for you now. He works alone. Badly.'}, 'Chadwick is still out there. Some things never change.'),
+      'Principal Krunk announced a "VIBES AUDIT." Nobody has explained what that means. Everyone is scared anyway.'],
+    days:[
+      ()=>({title:'THE VIBES AUDIT BEGINS', lines:["Principal Krunk stands in the hallway with a clipboard and zero plan.",
+        "He is \"auditing vibes.\" Several teachers have quietly resigned themselves to this.",
+        flagLine('chad',{ally:'Chadwick walks the halls with you now, which confuses absolutely everyone.',nemesis:'Chadwick reports your every move to anyone who will listen.',broken:'Chadwick\'s ex-crew salutes you in the hallway. He sees it happen.'},'Whatever it means, it means more eyes on you.')]}),
+      {title:'TROPHY CASE RUMORS', lines:["A rumor is going around that the trophy case hasn't had a real trophy in it since 2011.",
+        "Someone (you, hypothetically) should look into that.",
+        "Krunk gets very twitchy whenever the trophy case comes up."]},
+      ()=>({title:'THE ADMIN WING', lines:["The teacher's lounge wing is suddenly patrolled like it's guarding launch codes.",
+        "High risk. Also, rumor has it, genuinely good money in there.",
+        brandLine({GHOST:'Good thing nobody can prove you were ever there.', MUSCLE:'Good thing nobody wants to find out what happens if they stop you.', CHARM:'Good thing you already charmed the hall monitor\'s schedule out of him.'},'Tread carefully. Or don\'t. You\'re kind of a big deal now.')]}),
+      {title:'SURPRISE SWEEP', lines:["Krunk announces a \"surprise\" sweep over the PA. He announced it. It is not a surprise.",
+        "Lockers everywhere are being checked. Yours is definitely on the list.",
+        "Tomorrow is the real one. Today's just the dress rehearsal."]},
+      ()=>({title:'THE LOCKER SWEEP', lines:["Today's the real sweep. Every locker, every bag, every kid with a nervous face.",
+        "Move your stash, keep your hands clean, and do not — under any circumstance — look guilty.",
+        "Survive the day with a clean record and Krunk's whole operation looks foolish."]}) ],
+  },
+  { name:'FINALS WEEK',
+    intro:()=>['Finals week. Chaos is a WEEK now, not a day.',
+      flagLine('krunk', {paid:'Krunk takes his cut and looks the other way. Mostly. He still stares.', owned:'Krunk works for you now. He hates it. He is very bad at hiding that.', war:'Krunk has declared open war. He rented a bullhorn.'}, 'Krunk is still figuring out what he wants from you.'),
+      flagLine('chad', {ally:'Chadwick\'s got your back for the finale. Weird era for both of you.', nemesis:'Chadwick is coming for the throne. He has a crew. He has a grudge.', broken:'Chadwick, humiliated and alone, is still somehow a problem.'}, 'Chadwick is out there somewhere, doing Chadwick things.'),
+      'Push CONTROL to 100%. Own every wing. This is the GRINDSET GAMES.'],
+    days:[
+      ()=>({title:'FULL CHAOS MODE', lines:["Finals week. The whole school has abandoned all pretense of normal behavior.",
+        "Everyone wants something. Everyone owes somebody. It's beautiful, honestly.",
+        flagLine('krunk',{paid:'Krunk waves you past a hall sweep without even looking up.',owned:'Krunk \"volunteers\" to distract the hall monitor for you. Badly. Effectively.',war:'Krunk has personally joined a patrol route. This is now personal.'},'Push hard. This is the home stretch.')]}),
+      {title:'EVERY WING, EVERY HALL', lines:["No more corners of the school that are \"not your territory.\" All of them are now, allegedly, your territory.",
+        "Prove it. Every wing, every hall, every bathroom.",
+        "Control climbs with every deal, every win, every day you don't get caught."]},
+      {title:'THE FINAL PUSH', lines:["You can feel it. The whole school is basically yours already.",
+        "A few more good days and there won't be a single hallway that isn't, in some small tragic way, about you.",
+        "Keep going."]},
+      {title:'THE LAST BELL APPROACHES', lines:["One day left before the Grindset Games. Everyone who has a grudge against you is finalizing plans.",
+        "Everyone who's on your side is also finalizing plans, weirdly, for the same event.",
+        "Tomorrow, it all comes together. Or apart. TBD."]},
+      ()=>({title:'THE GRINDSET GAMES', lines:["The whole school turns into one enormous, deeply unsanctioned event.",
+        flagLine('chad',{ally:'Chadwick shows up as backup, in a matching windbreaker. Somehow it works.',nemesis:'Chadwick shows up with his whole crew, out for blood (comedic, cartoonish blood).',broken:'Chadwick shows up alone, furious, and wildly outmatched.'},'Chadwick is out here somewhere too, obviously.'),
+        flagLine('krunk',{paid:'Krunk stands off to the side, cut secured, pretending not to watch.',owned:'Krunk is technically running security for YOU right now.',war:'Krunk leads the final sweep himself, bullhorn and all.'},'Push CONTROL to 100% before the last bell. This is it.')]}) ],
+  },
+];
+
+// ---- crossroads: end of Act 1 / 2 / 3, sets a permanent flag ----
+const CROSSROADS=[null,
+  { title:'HOW DO YOU MAKE YOUR NAME?', subtitle:'Act 1 complete. The whole school is starting to ask who you are.',
+    choices:[
+      {emoji:'👊', label:'MUSCLE', line:'"They\'ll respect you or they\'ll limp."', apply:()=>{G.camp.brand='MUSCLE';}},
+      {emoji:'😎', label:'CHARM', line:'"Undercut, out-talk, out-hustle."', apply:()=>{G.camp.brand='CHARM';}},
+      {emoji:'👻', label:'GHOST', line:'"They can\'t tax what they can\'t catch."', apply:()=>{G.camp.brand='GHOST';}},
+    ]},
+  { title:"CHADWICK'S OFFER", subtitle:'Act 2 complete. Chadwick, uncharacteristically, wants to talk.',
+    choices:[
+      {emoji:'🤝', label:'MERGE', line:'Partner up. He becomes an ally who shows up to help in the finale.', apply:()=>{G.camp.flags.chad='ally';}},
+      {emoji:'💥', label:'CRUSH', line:'Refuse. Total war. He gets desperate and dangerous.', apply:()=>{G.camp.flags.chad='nemesis';}},
+      {emoji:'🪤', label:'ABSORB', line:'Poach his crew out from under him. He goes lone-wolf villain.', apply:()=>{G.camp.flags.chad='broken';}},
+    ]},
+  { title:"KRUNK'S ULTIMATUM", subtitle:'Act 3 complete. Principal Krunk wants a cut of the operation.',
+    choices:[
+      {emoji:'💵', label:'PAY HIM OFF', line:'Lose a cash cut, gain "administrative protection."', apply:()=>{G.camp.flags.krunk='paid';}},
+      {emoji:'🗄️', label:'BLACKMAIL HIM', line:'You found the trophy-case books. He works for YOU now.', apply:()=>{G.camp.flags.krunk='owned';}},
+      {emoji:'⚔️', label:'DECLARE WAR', line:'Hardest path, biggest finale payoff. Admin comes at you full force.', apply:()=>{G.camp.flags.krunk='war';}},
+    ]},
+];
+function chooseCrossroads(act, ch){
+  ch.apply();
+  G.camp.act=act+1; G.camp.actDay=1; G.camp.pendingTransition=null;
+  saveCampaign();
+  startDay();
+}
+
+// ---- endings ----
+const ENDINGS={
+  HUSTLER:{key:'HUSTLER', title:'CERTIFIED HUSTLER', emoji:'🏆', tag:'SECRET S-RANK', epilogue:[
+    'You own 100% of the school and never once got caught.',
+    'You beat Chadwick every single act and never laid a hand on a teacher.',
+    'The guidance counselor already wrote your college essay. It is just your resume.',
+    'See the guidance counselor immediately. No really. Right now.']},
+  KINGPIN:{key:'KINGPIN', title:'THE KINGPIN', emoji:'👑', tag:'', epilogue:[
+    'You crushed everyone who stood in your way, and a few who didn\'t.',
+    'You own the halls. The halls, in turn, kind of own you now.',
+    'Beautiful, really, in a deeply unhinged freshman-year way.']},
+  CEO:{key:'CEO', title:'THE CEO', emoji:'💼', tag:'', epilogue:[
+    'You and Chadwick merged into Grindset Holdings LLC (unofficial, unlicensed, extremely real).',
+    'He\'s COO now. You\'re "pivoting to a legitimate business model," which is a lie, but a confident one.',
+    'IPO on the horizon. The horizon is the school parking lot.']},
+  LEGEND:{key:'LEGEND', title:'THE LEGEND / PHANTOM', emoji:'👻', tag:'', epilogue:[
+    'Nobody ever proved anything. There is barely any evidence you exist.',
+    'Freshmen tell stories about a kid who was never seen and never caught.',
+    'You graduate a myth. A vapor. A legend in a hoodie.']},
+  CAUTIONARY:{key:'CAUTIONARY', title:'THE CAUTIONARY TALE', emoji:'🎤', tag:'', epilogue:[
+    'You got caught. A lot. Like, a genuinely impressive amount.',
+    'You are now a paid motivational speaker touring middle schools, warning kids about the grindset.',
+    'The speech kind of slaps though. You still got the bag, just... differently.']},
+  GRADUATE:{key:'GRADUATE', title:'THE GRADUATE', emoji:'🎓', tag:'', epilogue:[
+    'You made it through. You own the school, more or less, in your own specific weird way.',
+    'Nobody quite knows how to categorize what happened this semester. Neither do you.',
+    'Onward to sophomore year, presumably with a much bigger backpack.']},
+};
+function computeEnding(){
+  const camp=G.camp, st=camp.stats;
+  const allBeat=(st.actBeatChad||[]).length>=4 && st.actBeatChad.every(Boolean);
+  if(camp.control>=100 && allBeat && (st.teacherShoves||0)===0) return ENDINGS.HUSTLER;
+  if((st.busts||0)>=BUST_CAUTIONARY) return ENDINGS.CAUTIONARY;
+  if(camp.brand==='GHOST' && (st.busts||0)<=3) return ENDINGS.LEGEND;
+  if((camp.flags.chad==='nemesis'||camp.flags.chad==='broken') && (camp.flags.krunk==='war'||camp.flags.krunk==='owned')) return ENDINGS.KINGPIN;
+  if(camp.flags.chad==='ally' && camp.flags.krunk==='paid') return ENDINGS.CEO;
+  return ENDINGS.GRADUATE;
+}
+function openEnding(){
+  const e=computeEnding();
+  if(!G.camp.endingsSeen.includes(e.key)) G.camp.endingsSeen.push(e.key);
+  G.endingResult=e;
+  saveCampaign();
+  G.screen='ending';
+}
+function restartCampaign(){
+  const keepBest=G.best, seen=G.camp?G.camp.endingsSeen.slice():[];
+  G.camp={act:1,actDay:1,clout:0,control:0,brand:null,flags:{},notoriety:0,endingsSeen:seen,
+    stats:{busts:0,teacherShoves:0,actBeatChad:[false,false,false,false],totalCash:0,totalDeals:0},
+    lastIntroAct:0, pendingTransition:null};
+  saveCampaign();
+  G.day=1; localStorage.setItem('fg_day','1');
+  G.best=keepBest;
+  G.endingResult=null;
+  G.screen='title';
+}
+function openActIntro(){ G.camp.lastIntroAct=G.camp.act; saveCampaign(); G.screen='actintro'; }
+G.camp = loadCampaign(); // boot: load or initialize campaign save (backward-compatible with pre-campaign saves)
+function afterSummary(){
+  if(!G.camp){ startDay(); return; }
+  const pt=G.camp.pendingTransition;
+  if(pt==='crossroads'){ G.screen='crossroads'; }
+  else if(pt==='ending'){ openEnding(); }
+  else { startDay(); }
+}
 
 function pushToast(txt,who,dur){ G.toasts.push({txt,who:who||'',t:dur||4.2, born:performance.now(), age:0}); if(G.toasts.length>4)G.toasts.shift(); }
 
 // story card first, then the actual day
 function startDay(){
+  if(G.camp && G.camp.actDay===1 && G.camp.lastIntroAct!==G.camp.act && ACT_DEFS[G.camp.act]){
+    openActIntro(); return;
+  }
+  showDayStory();
+}
+function showDayStory(){
   const d=G.day;
-  const s = d<=DAY_STORIES.length ? DAY_STORIES[d-1]
-    : {title:'STILL GRINDING', lines:[pick(STORY_EXTRA), 'Chadwick is still out there. You know what to do.']};
+  let s=null;
+  if(G.camp && ACT_DEFS[G.camp.act]){
+    const idx=clamp((G.camp.actDay||1)-1,0,4);
+    const raw=ACT_DEFS[G.camp.act].days[idx];
+    s = typeof raw==='function' ? raw() : raw;
+  }
+  if(!s){
+    s = d<=DAY_STORIES.length ? DAY_STORIES[d-1]
+      : {title:'STILL GRINDING', lines:[pick(STORY_EXTRA), 'Chadwick is still out there. You know what to do.']};
+  }
   G.storyCard={day:d, title:s.title, lines:s.lines};
   G.screen='story';
 }
@@ -711,6 +966,17 @@ function beginDay(){
   G.activity=null; G.actT=rand(4,7); G.noteIntel=false;
   G.principalOverride=null; G.teacherBustT=0;
   spawnTeachers(); spawnAmbients();
+  // CAMPAIGN: mission-day objective banner + per-day clout tally
+  G.campCloutToday=0;
+  if(G.camp){
+    const md = G.camp.actDay>=5 ? MISSION_DEFS[G.camp.act] : null;
+    G.missionObjective = md||null;
+    if(md){ pushToast(md.emoji+' '+md.name,'',4.5); pushToast('🎯 OBJECTIVE: '+md.obj,'',5.5); }
+    // Act2+ branching flavor: a flag-aware toast so choices keep echoing through the run
+    if(G.camp.act===2 && G.camp.brand){ pushToast(brandLine({MUSCLE:'Chadwick: "heard you\'ve been shoving people. cute."',CHARM:'Chadwick: "heard you\'ve been out-talking my guys. not cute."',GHOST:'Chadwick: "heard you don\'t exist. also not cute."'}),'',3.4); }
+    else if(G.camp.act>=3 && G.camp.flags.chad){ pushToast(flagLine('chad',{ally:'Chadwick: "we\'re basically business partners now 🤝"',nemesis:'Chadwick: "I dream about ruining you. Every night."',broken:'Chadwick: "my ex-crew joined YOU? cold."'}),'',3.4); }
+    if(G.camp.act>=4 && G.camp.flags.krunk){ pushToast(flagLine('krunk',{paid:'Krunk: "your \'donation\' has been received. wink."',owned:'Krunk: "please don\'t make me do anything else illegal today."',war:'Krunk: "I WILL find your locker."'}),'',3.4); }
+  } else { G.missionObjective=null; }
   onPeriodStart();
 }
 function onPeriodStart(){
@@ -803,17 +1069,18 @@ function doDeal(cust){
   let price=choice.price;
   if(choice.matched) price=Math.round(price*rand(1.0,1.25));   // premium for exact ask
   else price=Math.round(price*rand(0.85,1.05));
-  price=Math.round(price*(G.priceMult||1)*(cust.premium||1));  // day economy + note intel
+  price=Math.round(price*(G.priceMult||1)*(cust.premium||1)*brandDealMult());  // day economy + note intel + brand
   finishDeal(cust, price, seen, choice.id, choice.matched);
 }
 function finishDeal(cust, price, seen, prodId, matched){
   G.cash+=price; G.inv[prodId]=Math.max(0,(G.inv[prodId]||0)-1); G.deals++;
   G.cashPop=1; cashFloat('+$'+price, player.x, player.y-0.2, '#8fe08f');
+  if(G.camp) addClout(matched?3:2, matched?'exact-match deal':'deal');
   const pr=PROD_BY_ID[prodId];
   const ex=pick(DEAL_LINES_BUY);
   const l1 = matched? 'you: '+pr.emoji+' exactly what u wanted — $'+price : 'you: '+pr.emoji+' that\'s $'+price+' 💨';
   openDialog(cust,[l1, cust.name+': '+pick([ex[0],ex[1]])]);
-  if(seen){ G.heat=clamp(G.heat+28,0,100); alertMonitor(); pushToast('the MONITOR saw that deal 😳','',3); }
+  if(seen){ G.heat=clamp(G.heat+Math.round(28*heatMult()),0,100); alertMonitor(); pushToast('the MONITOR saw that deal 😳','',3); }
   freeCustomer(cust,true, prodId);
 }
 function freeCustomer(cust,leaving, prodId){
@@ -831,7 +1098,8 @@ function alertMonitor(){ const m=G.monitor; m.mode='chase'; m.lostT=0; m.repath=
 function monitorSeesPlayer(){
   const m=G.monitor; if(!m||player.seated) return false;
   const d2=dist2(m.x,m.y,player.x,player.y);
-  if(d2>6.2*6.2) return false;
+  const visR=6.2*(1+notorietyBoost());
+  if(d2>visR*visR) return false;
   const ang=Math.atan2(player.y-m.y, player.x-m.x);
   let da=Math.abs(((ang-m.facing+Math.PI*3)%(Math.PI*2))-Math.PI);
   if(m.mode==='chase') { if(d2<2.5*2.5 && !fogBlocksLOS(m.x,m.y,player.x,player.y)) return true; } // close range wide awareness while chasing
@@ -841,6 +1109,7 @@ function monitorSeesPlayer(){
 }
 function busted(){
   G.busted++; G.bustFlash=1.4; G.shake=Math.max(G.shake,10); G.teacherBustT=0;
+  if(G.camp){ addClout(-6,'busted'); G.camp.stats.busts=(G.camp.stats.busts||0)+1; G.camp.notoriety=clamp((G.camp.notoriety||0)+8,0,100); saveCampaign(); }
   let lost=0; for(const p of PRODUCTS){ lost+=G.inv[p.id]||0; G.inv[p.id]=0; }
   const fine=Math.min(G.cash, randi(18,40));
   G.cash-=fine;
@@ -878,9 +1147,41 @@ function endDay(){
   } else {
     chadLine='Chadwick outsold you. He posted about it on LinkedIn. 💼';
   }
+  // ---- CAMPAIGN: end-of-day clout, story mission check, act gate ----
+  let missionResult=null, campToast=null;
+  if(G.camp){
+    const camp=G.camp;
+    camp.stats.totalCash=(camp.stats.totalCash||0)+G.cash;
+    camp.stats.totalDeals=(camp.stats.totalDeals||0)+G.deals;
+    if(beatChad) addClout(10,'out-earned Chadwick');
+    if(G.busted===0) addClout(5,'clean day, no busts');
+    const wasMissionDay = (camp.actDay||1)>=5;
+    if(wasMissionDay){
+      camp.stats.actBeatChad=camp.stats.actBeatChad||[false,false,false,false];
+      camp.stats.actBeatChad[camp.act-1]=beatChad;
+      const md=MISSION_DEFS[camp.act];
+      if(md){
+        const win=md.check({cash:G.cash, chadCash:G.chadCash, busted:G.busted}, camp);
+        if(win) addClout(25,'story mission complete');
+        missionResult={name:md.name, win, line: win?md.winLine:md.loseLine};
+      }
+      const need=ACT_GATE[camp.act]||100;
+      if(camp.control>=need){
+        camp.pendingTransition = camp.act<4 ? 'crossroads' : 'ending';
+      } else {
+        camp.pendingTransition='replay';
+        camp.actDay=1;
+        campToast='Control only '+camp.control+'% — needed '+need+'% to clear this act. Running it back. 🔁';
+      }
+    } else {
+      camp.actDay=(camp.actDay||1)+1;
+      camp.pendingTransition='next';
+    }
+    saveCampaign();
+  }
   G.dayEndStats={cash:G.cash, deals:G.deals, busted:G.busted, grade:bumped, baseGrade:grade,
     quip, chadCash:G.chadCash, beatChad, chadLine, snitches:G.snitchFines.slice(), snitchTotal,
-    day:G.day};
+    day:G.day, mission:missionResult, campToast, cloutToday:G.campCloutToday||0};
   G.day++; localStorage.setItem('fg_day', G.day);
 }
 
@@ -901,13 +1202,13 @@ const MON_WP=[{x:4,y:11.5},{x:14,y:11.5},{x:28,y:11.5},{x:28,y:20},{x:25,y:30},{
 function updateMonitor(dt){
   const m=G.monitor; if(!m) return;
   const p=PERIODS[G.periodIdx];
-  const spd=3.6*1.12;
+  const spd=3.6*1.12*(1+notorietyBoost()*0.4);
   // detection: dealing seen handled elsewhere; here catch "out of class in class time" or line of sight on suspicious player
   const classtime = p.kind==='class';
   const playerBad = !player.seated && classtime; // skipping class
   if(m.mode!=='chase' && monitorSeesPlayer() && (playerBad || G.heat>60)){
     alertMonitor(); pushToast(pick(['HALL MONITOR: "HALL PASS?!"','HALL MONITOR: "FRESHMAN DETECTED"','HALL MONITOR: "I have a SASH"']),'',2.6);
-    G.heat=clamp(G.heat+14,0,100);
+    G.heat=clamp(G.heat+Math.round(14*heatMult()),0,100);
   }
   if(m.mode==='chase'){
     m.repath-=dt;
@@ -919,7 +1220,8 @@ function updateMonitor(dt){
     if(monitorSeesPlayer() || player.seated){ m.lostT= player.seated?m.lostT+dt: 0; }
     else m.lostT+=dt;
     if(player.seated) m.lostT+=dt;
-    if(m.lostT>3.4){ m.mode='patrol'; m.wp=0; }
+    const lostThresh=(G.camp&&G.camp.brand==='GHOST')?2.2:3.4;
+    if(m.lostT>lostThresh){ m.mode='patrol'; m.wp=0; }
   } else {
     // patrol loop
     if(m.pi>=m.path.length){
@@ -1060,6 +1362,7 @@ function shoveConsequences(a, isChad){
     G.heat=99; G.teacherBustT=1.35; // 99 not 100: the delayed bust handles it (comedy timing)
     G.principalOverride='Principal Krunk: "You shoved '+a.name.toUpperCase()+'?! I\'m not mad. I\'m IMPRESSED. Anyway, you\'re done."';
     pushToast('YOU SHOVED A TEACHER 💀💀💀','',3);
+    if(G.camp){ addClout(-10,'shoved a teacher'); G.camp.stats.teacherShoves=(G.camp.stats.teacherShoves||0)+1; G.camp.notoriety=clamp((G.camp.notoriety||0)+12,0,100); saveCampaign(); }
     return;
   }
   if(monitorSeesPlayer()){ G.heat=clamp(G.heat+34,0,100); alertMonitor(); pushToast('MONITOR SAW THE SHOVE 😳🚨','',3); }
@@ -1441,18 +1744,18 @@ function updateActivity(dt){
 }
 function answerQuiz(i){
   const A=G.activity; if(!A||A.type!=='quiz') return;
-  if(i===A.q.c) resolveActivity('CORRECT ✅ teacher gave you a Lunchable (resale value $6)', -12, 6);
+  if(i===A.q.c){ if(G.camp) addClout(3,'aced the quiz'); resolveActivity('CORRECT ✅ teacher gave you a Lunchable (resale value $6)', -12, 6); }
   else resolveActivity(A.q.roast, 4, 0);
 }
 function answerCalled(i){
   const A=G.activity; if(!A||A.type!=='called') return;
-  if(i===A.q.c) resolveActivity(A.q.praise+' ✅', -8, 4);
+  if(i===A.q.c){ if(G.camp) addClout(3,'crushed it when called on'); resolveActivity(A.q.praise+' ✅', -8, 4); }
   else resolveActivity(A.q.roast, 8, 0);
 }
 function tapAwake(){
   const A=G.activity; if(!A||A.type!=='awake') return;
   A.taps++;
-  if(A.taps>=A.need) resolveActivity('you look SO engaged. teacher\'s pet arc.', -10, 0);
+  if(A.taps>=A.need){ if(G.camp) addClout(3,'stayed woke'); resolveActivity('you look SO engaged. teacher\'s pet arc.', -10, 0); }
 }
 function readNote(){
   const A=G.activity; if(!A||A.type!=='note') return;
@@ -1828,7 +2131,7 @@ function drawHUD(){
   ctx.fillText(p.name, 22, 34);
   const dw=ctx.measureText(p.name).width;
   ctx.fillStyle='#8aa0ff'; ctx.font='bold 11px sans-serif';
-  ctx.fillText('DAY '+G.day, 22+dw+10, 33);
+  ctx.fillText('DAY '+G.day+(G.missionObjective?' 🎯':''), 22+dw+10, 33);
   const rem=Math.max(0,Math.ceil((p.dur||0)-G.periodT));
   ctx.font='bold 15px sans-serif'; ctx.fillStyle='#ffd24d';
   ctx.textAlign='right'; ctx.fillText(p.kind==='end'?'—':(rem+'s'), VW-24, 30); ctx.textAlign='left';
@@ -1860,6 +2163,13 @@ function drawHUD(){
   glassPanel(VW-160,116,150,26);
   ctx.fillStyle='#f4a6c8'; ctx.font='bold 12px sans-serif'; ctx.textAlign='left';
   ctx.fillText('Chadwick: $'+G.chadCash+' 📈', VW-152, 133);
+
+  // CAMPAIGN control chip
+  if(G.camp){
+    glassPanel(10,116,150,26,'rgba(255,205,80,0.5)');
+    ctx.fillStyle='#ffd24d'; ctx.font='bold 12px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('CONTROL '+G.camp.control+'%  ACT '+G.camp.act, 20, 133);
+  }
 
   // seated / class chalk strip
   if(p.kind==='class' && player.seated){
@@ -2108,6 +2418,88 @@ function drawStory(){
   ctx.fillText('best day: $'+G.best, VW/2, VH*0.72+52);
   ctx.textAlign='left';
 }
+// ---- CAMPAIGN screens: act intro / crossroads / ending ----
+function drawActIntro(){
+  if(!G.camp){ showDayStory(); return; }
+  const A=ACT_DEFS[G.camp.act];
+  if(!A){ showDayStory(); return; }
+  const g0=ctx.createLinearGradient(0,0,0,VH); g0.addColorStop(0,'#221433'); g0.addColorStop(1,'#0c0918');
+  ctx.fillStyle=g0; ctx.fillRect(0,0,VW,VH);
+  const now=performance.now()/1000;
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffcf3d'; ctx.font='bold 14px sans-serif';
+  ctx.fillText('— ACT '+G.camp.act+' —', VW/2, VH*0.16);
+  ctx.fillStyle='#fff'; ctx.font='900 26px sans-serif';
+  wrapText(A.name, VW/2, VH*0.16+36, VW-60, 30);
+  const lines=A.intro();
+  const PW=Math.min(VW-44,360), lineH=42;
+  panel((VW-PW)/2, VH*0.32, PW, lineH*lines.length+30, 'rgba(20,16,34,0.92)','rgba(140,140,190,0.35)');
+  ctx.font='13px sans-serif'; ctx.fillStyle='#e6e0f2';
+  for(let i=0;i<lines.length;i++) wrapText(lines[i], VW/2, VH*0.32+30+i*lineH, PW-36, 15);
+  ctx.fillStyle='#8aa0ff'; ctx.font='bold 12px sans-serif';
+  ctx.fillText('CONTROL '+G.camp.control+'%  ·  need '+(ACT_GATE[G.camp.act]||100)+'% to clear this act', VW/2, VH*0.32+lineH*lines.length+48);
+  const pulse=1+Math.sin(now*3)*0.04;
+  const bw=220*pulse, bh=58*pulse;
+  btn(VW/2-bw/2, VH*0.78-bh/2, bw, bh, '▶ ENTER ACT', ()=>{ showDayStory(); }, '#ff7a3d');
+  ctx.textAlign='left';
+}
+function choiceCard(x,y,w,h,ch,onTap){
+  rr(x,y,w,h,14); ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fill();
+  rr(x,y,w,h,14); ctx.lineWidth=2; ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.stroke();
+  ctx.textAlign='left';
+  ctx.font='26px sans-serif'; ctx.fillText(ch.emoji, x+14, y+h/2+9);
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 15px sans-serif'; ctx.fillText(ch.label, x+56, y+26);
+  ctx.fillStyle='#e6e0f2'; ctx.font='italic 12px sans-serif';
+  wrapText(ch.line, x+56, y+46, w-72, 14);
+  uiButtons.push({x,y,w,h,onTap});
+}
+function drawCrossroads(){
+  if(!G.camp){ afterSummary(); return; }
+  const cr=CROSSROADS[G.camp.act];
+  if(!cr){ afterSummary(); return; }
+  const g0=ctx.createLinearGradient(0,0,0,VH); g0.addColorStop(0,'#301428'); g0.addColorStop(1,'#0c0918');
+  ctx.fillStyle=g0; ctx.fillRect(0,0,VW,VH);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ff9ad2'; ctx.font='bold 13px sans-serif';
+  ctx.fillText('— CROSSROADS —', VW/2, 62);
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 21px sans-serif';
+  wrapText(cr.title, VW/2, 120, VW-50, 25);   // wrapText draws BACKWARD from this y, so keep clear of the label above
+  ctx.fillStyle='#cfc9e0'; ctx.font='italic 12px sans-serif';
+  wrapText(cr.subtitle, VW/2, 168, VW-70, 15);
+  const PW=Math.min(VW-40,360), PX=(VW-PW)/2;
+  let cy=Math.max(215, VH*0.27);
+  for(const ch of cr.choices){
+    choiceCard(PX, cy, PW, 78, ch, ()=>chooseCrossroads(G.camp.act, ch));
+    cy+=86;
+  }
+  ctx.textAlign='left';
+}
+function drawEnding(){
+  if(!G.camp){ G.screen='title'; return; }
+  const e=G.endingResult||computeEnding();
+  const g0=ctx.createLinearGradient(0,0,0,VH); g0.addColorStop(0,'#241030'); g0.addColorStop(1,'#0c0918');
+  ctx.fillStyle=g0; ctx.fillRect(0,0,VW,VH);
+  ctx.textAlign='center';
+  if(e.tag){ ctx.fillStyle='#ffd24d'; ctx.font='bold 12px sans-serif'; ctx.fillText(e.tag, VW/2, VH*0.10); }
+  ctx.font='46px sans-serif'; ctx.fillText(e.emoji, VW/2, VH*0.19);
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 24px sans-serif';
+  wrapText(e.title, VW/2, VH*0.19+38, VW-60, 28);
+  const PW=Math.min(VW-40,360), PX=(VW-PW)/2, PY=VH*0.33;
+  const boxH=26*e.epilogue.length+78;
+  panel(PX,PY,PW,boxH,'rgba(20,16,34,0.94)','rgba(150,150,200,0.4)');
+  ctx.font='13px sans-serif'; ctx.fillStyle='#e6e0f2';
+  let ey=PY+26;
+  for(const line of e.epilogue){ wrapText(line, VW/2, ey, PW-32, 15); ey+=30; }
+  ey+=6;
+  const camp=G.camp;
+  ctx.fillStyle='#8fe08f'; ctx.font='bold 12px sans-serif';
+  ctx.fillText('CONTROL '+camp.control+'%  ·  Brand: '+(camp.brand||'—')+'  ·  Total cash: $'+(camp.stats.totalCash||0), VW/2, ey);
+  ey+=18;
+  ctx.fillStyle='#cfc9e0'; ctx.font='11px sans-serif';
+  ctx.fillText('Busts: '+(camp.stats.busts||0)+'  ·  Endings seen: '+camp.endingsSeen.length+'/6', VW/2, ey);
+  btn(VW/2-120, VH-90, 240, 56, '🔁 NEW GAME+', ()=>restartCampaign(), '#ff7a3d');
+  ctx.textAlign='left';
+}
 function drawActivity(){
   const A=G.activity; if(!A) return;
   const PW=Math.min(VW-36,360), PX=(VW-PW)/2;
@@ -2162,7 +2554,8 @@ function drawSummary(){
   ctx.fillStyle='#ffcf3d'; ctx.font='900 28px sans-serif';
   ctx.fillText('🔔 DAY '+(s.day||'?')+' — FINAL BELL', VW/2, VH*0.11);
   const PW=Math.min(VW-40,360), PX=(VW-PW)/2, PY=VH*0.15;
-  panel(PX,PY,PW,264,'rgba(20,16,34,0.95)','rgba(150,150,200,0.4)');
+  const extraH=(s.mission?46:0)+(s.campToast?26:0)+(G.camp?18:0);
+  panel(PX,PY,PW,264+extraH,'rgba(20,16,34,0.95)','rgba(150,150,200,0.4)');
   ctx.fillStyle='#fff'; ctx.font='bold 16px sans-serif';
   ctx.fillText('Cash: $'+s.cash+'   ·   Deals: '+s.deals+' 💨   ·   Busted: '+s.busted, VW/2, PY+30);
   // You vs Chadwick bars
@@ -2184,8 +2577,27 @@ function drawSummary(){
   if(s.beatChad && s.grade!==s.baseGrade){ ctx.fillStyle='#ffe27a'; ctx.font='bold 11px sans-serif'; ctx.fillText('('+s.baseGrade+' → '+s.grade+' for beating Chadwick)', VW/2, barY+136); }
   ctx.fillStyle='#cfc9e0'; ctx.font='italic 12px sans-serif';
   wrapText('"'+s.quip+'"', VW/2, barY+156, PW-40, 15);
-  // snitches
+  // campaign: mission result + gate/replay toast
   let sy2=PY+280;
+  if(s.mission){
+    ctx.fillStyle=s.mission.win?'#8fe08f':'#ff9a9a'; ctx.font='bold 12px sans-serif';
+    ctx.fillText((s.mission.win?'🎯 MISSION WIN — ':'🎯 MISSION FAILED — ')+s.mission.name, VW/2, sy2);
+    sy2+=16;
+    ctx.fillStyle='#cfc9e0'; ctx.font='italic 11px sans-serif';
+    wrapText(s.mission.line, VW/2, sy2, PW-30, 13);
+    sy2+=30;
+  }
+  if(s.campToast){
+    ctx.fillStyle='#ffa53d'; ctx.font='bold 11px sans-serif';
+    wrapText(s.campToast, VW/2, sy2, PW-30, 13);
+    sy2+=26;
+  }
+  if(G.camp){
+    ctx.fillStyle='#ffd24d'; ctx.font='bold 12px sans-serif';
+    ctx.fillText('CLOUT: '+(s.cloutToday>=0?'+':'')+s.cloutToday+'  ·  CONTROL '+G.camp.control+'%', VW/2, sy2);
+    sy2+=20;
+  }
+  // snitches
   if(s.snitches.length){
     ctx.fillStyle='#ff9a9a'; ctx.font='bold 12px sans-serif';
     ctx.fillText('🐀 SNITCHES: -$'+s.snitchTotal, VW/2, sy2);
@@ -2193,8 +2605,10 @@ function drawSummary(){
     sy2+=8;
   }
   ctx.fillStyle='#8fe08f'; ctx.font='bold 14px sans-serif';
-  ctx.fillText('best day: $'+G.best, VW/2, Math.min(VH-96, sy2+18));
-  btn(VW/2-100, VH-84, 200, 54, '▶ NEXT DAY', ()=>startDay(), '#ff7a3d');
+  ctx.fillText('best day: $'+G.best, VW/2, Math.min(VH-110, sy2+18));
+  const pt=G.camp&&G.camp.pendingTransition;
+  const nextLabel = pt==='crossroads'?'🔀 CROSSROADS' : pt==='ending'?'🏁 FINALE' : '▶ NEXT DAY';
+  btn(VW/2-100, VH-84, 200, 54, nextLabel, ()=>afterSummary(), '#ff7a3d');
   ctx.textAlign='left';
 }
 
@@ -2203,6 +2617,9 @@ function render(){
   ctx.fillStyle='#0e0b16'; ctx.fillRect(0,0,VW,VH);
   if(G.screen==='title'){ drawTitle(); }
   else if(G.screen==='story'){ drawStory(); }
+  else if(G.screen==='actintro'){ drawActIntro(); }
+  else if(G.screen==='crossroads'){ drawCrossroads(); }
+  else if(G.screen==='ending'){ drawEnding(); }
   else if(G.screen==='summary'){ drawSummary(); }
   else {
     // camera shake offsets the world only
@@ -2245,7 +2662,15 @@ window.__FG={G, startDay, beginDay, player, spawnCustomer, findPath, gi, grid, M
   _chadSteal:()=>{ const c=G.customers.find(x=>x.state==='wait'); if(c){chadwickSteals(c); return c.name;} return 'none'; },
   _pickBall:()=>{ if(G.gymOn){ G.holdingBall=true; return true;} return false; },
   _throw:()=>throwBall(),
-  _tele:(x,y)=>{ player.x=x; player.y=y; player.path=[]; } };
+  _tele:(x,y)=>{ player.x=x; player.y=y; player.path=[]; },
+  // ---- CAMPAIGN debug hooks ----
+  addClout, afterSummary, computeEnding, openEnding, restartCampaign, chooseCrossroads, showDayStory, openActIntro,
+  saveCampaign, loadCampaign, ACT_DEFS, MISSION_DEFS, CROSSROADS, ENDINGS, ACT_GATE,
+  _setCamp:(patch)=>{ Object.assign(G.camp, patch); if(patch.flags) Object.assign(G.camp.flags, patch.flags); G.camp.control=clamp(Math.round(G.camp.clout/CLOUT_PER_PCT),0,100); saveCampaign(); },
+  _forceAct:(act,actDay)=>{ G.camp.act=act; G.camp.actDay=actDay||1; G.camp.pendingTransition=null; saveCampaign(); },
+  _forceControl:(pct)=>{ G.camp.clout=pct*CLOUT_PER_PCT; G.camp.control=clamp(pct,0,100); saveCampaign(); },
+  _finishDay:()=>endDay(),
+  _gotoEnding:()=>openEnding() };
 
 })();
 </script>
