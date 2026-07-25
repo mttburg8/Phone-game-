@@ -1,4 +1,5 @@
 <title>Freshman Grindset</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
   html, body { width:100%; height:100%; overflow:hidden; background:#0e0b16; touch-action:none; overscroll-behavior:none; position:fixed; inset:0; }
@@ -144,32 +145,37 @@ function hitButton(px,py){
 function actBtnRect(){ const r=Math.min(62,VW*0.13); return {x:VW-r-26, y:VH-r-42, r:r}; }
 function shoveBtnRect(){ const r=Math.min(50,VW*0.108); const ab=actBtnRect(); return {x:ab.x-ab.r-r-14, y:VH-r-52, r:r}; }
 
+// screens where a tap ANYWHERE advances to the next state (so a missed button never traps you)
+const ADVANCE_SCREEN={
+  title: ()=>startDay(),
+  actintro: ()=>showDayStory(),
+  story: ()=>beginDay(),
+  summary: ()=>afterSummary(),
+};
 canvas.addEventListener('pointerdown',e=>{
   e.preventDefault();
   const px=e.clientX, py=e.clientY;
-  if(hitButton(px,py)) return;
-  if(G.screen!=='play') return;
-  // shove button (left of action)
-  const sb=shoveBtnRect();
-  if(dist2(px,py,sb.x,sb.y)<=(sb.r*1.25)*(sb.r*1.25)){
-    shoveBtnPid=e.pointerId; shovePress=true; return;
-  }
-  // action button (bottom-right)
+  if(hitButton(px,py)) return;               // a real on-screen button was hit
+  // non-play screens: tap anywhere advances (crossroads/ending need a real choice, excluded)
+  if(G.screen!=='play'){ const adv=ADVANCE_SCREEN[G.screen]; if(adv) adv(); return; }
+  // action button (bottom-right) — check first so it isn't swallowed by the joystick
   const ab=actBtnRect();
-  if(dist2(px,py,ab.x,ab.y)<=(ab.r*1.2)*(ab.r*1.2) && px>VW*0.5){
+  if(dist2(px,py,ab.x,ab.y)<=(ab.r*1.3)*(ab.r*1.3)){
     actBtnPid=e.pointerId; actionPress=true; return;
   }
-  if(px<VW*0.5){ // left half = joystick
-    joy.active=true; joy.pid=e.pointerId; joy.ox=px; joy.oy=py; joy.dx=0; joy.dy=0;
-  } else { // right half tap = action
-    actBtnPid=e.pointerId; actionPress=true;
+  // shove button (left of action)
+  const sb=shoveBtnRect();
+  if(dist2(px,py,sb.x,sb.y)<=(sb.r*1.3)*(sb.r*1.3)){
+    shoveBtnPid=e.pointerId; shovePress=true; return;
   }
+  // anywhere else = floating joystick (works from EITHER half of the screen)
+  joy.active=true; joy.pid=e.pointerId; joy.ox=px; joy.oy=py; joy.dx=0; joy.dy=0;
 },{passive:false});
 canvas.addEventListener('pointermove',e=>{
   if(e.pointerId===joy.pid && joy.active){
     e.preventDefault();
     let dx=e.clientX-joy.ox, dy=e.clientY-joy.oy;
-    const m=Math.hypot(dx,dy), max=48;
+    const m=Math.hypot(dx,dy), max=44;
     if(m>max){ dx=dx/m*max; dy=dy/m*max; }
     joy.dx=dx/max; joy.dy=dy/max;
   }
@@ -2250,8 +2256,8 @@ function drawControls(){
     ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(joy.ox+joy.dx*48,joy.oy+joy.dy*48,26,0,7); ctx.fill();
     ctx.globalAlpha=1;
   } else {
-    ctx.globalAlpha=0.25; ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='center';
-    ctx.fillText('◄ move (drag)', VW*0.25, VH-40); ctx.textAlign='left'; ctx.globalAlpha=1;
+    ctx.globalAlpha=0.28; ctx.fillStyle='#fff'; ctx.font='12px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('drag anywhere to move 👆', VW*0.34, VH-38); ctx.textAlign='left'; ctx.globalAlpha=1;
   }
   // action button
   const ab=actBtnRect();
