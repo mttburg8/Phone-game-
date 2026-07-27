@@ -967,7 +967,49 @@ const PRODUCTS=[
   {id:'mystery', name:'MYSTERY LOCKER JUICE',     short:'Mystery Juice',  emoji:'🧪', buy:10, sell:40, ask:'mystery juice',   askTxt:'gimme the mystery locker juice 🎲 im brave'},
 ];
 const PROD_BY_ID={}; for(const p of PRODUCTS) PROD_BY_ID[p.id]=p;
-const MAX_ITEMS=8;
+const MAX_ITEMS=8;   // base bag; upgrades raise it (see bagCap)
+
+// ======================= [UPGRADES — the progression spine] =================
+// Money used to just pile up for a letter grade. Now you spend it between days
+// on things that actually change how a school day plays.
+const UPGRADES=[
+  {id:'bag',   name:'JANSPORT XL',      emoji:'🎒', max:2, cost:[130,300],
+   desc:['carry 12 instead of 8','carry 16. structurally unwise.'],
+   flavor:'"it has a laptop sleeve. you will never use the laptop sleeve."'},
+  {id:'pass',  name:'FAKE HALL PASS',   emoji:'📝', max:1, cost:[190],
+   desc:['first catch each day is voided'],
+   flavor:'"laminated. signed by a teacher who does not exist."'},
+  {id:'soles', name:'SILENT SOLES',     emoji:'👟', max:1, cost:[160],
+   desc:['sneak faster · monitor spots you 25% later'],
+   flavor:'"off-brand. squeak-free. morally quiet."'},
+  {id:'look',  name:'LOOKOUT KID',      emoji:'👀', max:1, cost:[210],
+   desc:['warns you when the monitor is hunting'],
+   flavor:'"his name is Denny. he works for snacks."'},
+  {id:'stash', name:'LOCKER STASH',     emoji:'🗄️', max:1, cost:[175],
+   desc:['keep half your product when busted'],
+   flavor:'"locker 237. do not ask what else is in there."'},
+  {id:'phone', name:'BURNER PHONE',     emoji:'📱', max:1, cost:[150],
+   desc:['one extra customer every break'],
+   flavor:'"it only texts. it only receives. it is beautiful."'},
+  {id:'tongue',name:'SILVER TONGUE',    emoji:'💬', max:2, cost:[200,420],
+   desc:['+12% on every sale','+25% on every sale. you could sell air.'],
+   flavor:'"you once talked a vending machine into a refund."'},
+];
+const UPG_BY_ID={}; for(const u of UPGRADES) UPG_BY_ID[u.id]=u;
+function upgLvl(id){ return (G.camp && G.camp.upg && G.camp.upg[id]) || 0; }
+function upgNextCost(u){ const l=upgLvl(u.id); return l>=u.max? null : u.cost[l]; }
+function buyUpgrade(id){
+  const u=UPG_BY_ID[id]; if(!u||!G.camp) return false;
+  const c=upgNextCost(u); if(c===null || G.cash<c) return false;
+  G.cash-=c; G.camp.upg=G.camp.upg||{}; G.camp.upg[id]=upgLvl(id)+1;
+  saveCampaign&&saveCampaign(); SFX.cash&&SFX.cash();
+  pushToast(u.emoji+' '+u.name+' acquired. '+u.flavor,'',3.6);
+  return true;
+}
+function bagCap(){ return MAX_ITEMS + upgLvl('bag')*4; }
+function sellMult(){ const l=upgLvl('tongue'); return l===0?1:(l===1?1.12:1.25); }
+function sneakSightMult(){ return upgLvl('soles')? 0.62 : 0.8; }   // vs 0.8 base while sneaking
+function sneakSpeedMult(){ return upgLvl('soles')? 0.72 : 0.55; }  // less of a crawl
 function invTotal(){ let s=0; for(const p of PRODUCTS) s+=(G.inv[p.id]||0); return s; }
 function invHasAny(){ return invTotal()>0; }
 function invFirstStocked(){ for(const p of PRODUCTS){ if((G.inv[p.id]||0)>0) return p.id; } return null; }
@@ -1392,6 +1434,7 @@ function beginDay(){
   // V7: day 1 of a fresh campaign is the guided tutorial day (skippable in-HUD)
   const tutorialDay = !!(G.camp && G.camp.act===1 && (G.camp.actDay||1)===1 && !G.camp.flags.tutorialDone);
   PERIODS = tutorialDay ? PERIODS_TUT : PERIODS_DAY;
+  G.passUsed=false; G.upgShop=false;
   G.tut=null; G.tutFinish=false; G.questOpen=false; G.bustReturn=0; G.lunchCheckIn=false;
   G.sideC={}; G.side = tutorialDay? [] : rollSideTasks();
   G.periodIdx=0; G.periodT=0; G.ringT=1.6; G.ringText='BRRRRING!'; G.ringShake=1;
@@ -1450,7 +1493,7 @@ function onPeriodStart(){
   // V7: the school is ~2x bigger, so demand scales with it or the halls feel dead.
   if(G.tut){ return; }                     // tutorial hand-places its own customer
   if(p.kind==='pass'||p.kind==='lunch'){
-    const n = p.kind==='lunch'? randi(5,7): randi(3,5);
+    const n = (p.kind==='lunch'? randi(5,7): randi(3,5)) + (upgLvl('phone')?1:0);
     for(let i=0;i<n;i++) setTimeout(()=>spawnCustomer(), rand(300,5200));
   } else if(p.kind==='gym'){
     for(let i=0;i<3;i++) setTimeout(()=>spawnCustomer(true), rand(5000,20000));
@@ -1559,7 +1602,7 @@ function doDeal(cust){
   let price=choice.price;
   if(choice.matched) price=Math.round(price*rand(1.0,1.25));   // premium for exact ask
   else price=Math.round(price*rand(0.85,1.05));
-  price=Math.round(price*(G.priceMult||1)*(cust.premium||1)*brandDealMult());  // day economy + note intel + brand
+  price=Math.round(price*(G.priceMult||1)*(cust.premium||1)*brandDealMult()*sellMult());  // day economy + note intel + brand
   finishDeal(cust, price, seen, choice.id, choice.matched);
 }
 function finishDeal(cust, price, seen, prodId, matched){
@@ -1585,13 +1628,21 @@ function freeCustomer(cust,leaving, prodId){
 }
 function openDialog(who,lines){ G.dialog={who,lines,t:2.6}; }
 function openShop(){ G.shop=true; }
-function buyProduct(id){ const pr=PROD_BY_ID[id]; if(invTotal()<MAX_ITEMS && G.cash>=pr.buy){ G.cash-=pr.buy; G.inv[id]=(G.inv[id]||0)+1; return true; } return false; }
+function buyProduct(id){ const pr=PROD_BY_ID[id]; if(invTotal()<bagCap() && G.cash>=pr.buy){ G.cash-=pr.buy; G.inv[id]=(G.inv[id]||0)+1; return true; } return false; }
 
-function alertMonitor(){ const m=G.monitor; m.mode='chase'; m.lostT=0; m.repath=0; }
+function lookoutWarn(){
+  if(!upgLvl('look')) return;
+  if(G.lookT && performance.now()-G.lookT<6000) return;
+  G.lookT=performance.now();
+  pushToast(pick(['👀 Denny: "SASH INCOMING. move."','👀 Denny: "he\'s hunting. i saw the clipboard."',
+    '👀 Denny: "abort. ABORT. he did the whistle thing."']),'',2.8);
+  SFX.blip&&SFX.blip();
+}
+function alertMonitor(){ lookoutWarn(); const m=G.monitor; m.mode='chase'; m.lostT=0; m.repath=0; }
 function monitorSeesPlayer(){
   const m=G.monitor; if(!m||player.seated) return false;
   const d2=dist2(m.x,m.y,player.x,player.y);
-  const visR=6.2*(1+notorietyBoost())*(player.sneak?0.8:1);
+  const visR=6.2*(1+notorietyBoost())*(player.sneak?sneakSightMult():1);
   if(d2>visR*visR) return false;
   const ang=Math.atan2(player.y-m.y, player.x-m.x);
   let da=Math.abs(((ang-m.facing+Math.PI*3)%(Math.PI*2))-Math.PI);
@@ -1601,10 +1652,20 @@ function monitorSeesPlayer(){
   return hasLOS(m.x,m.y,player.x,player.y);
 }
 function busted(){
+  // FAKE HALL PASS: the catch is voided entirely — no record, no penalty
+  if(upgLvl('pass') && !G.passUsed){
+    G.passUsed=true; G.heat=28; G.shake=Math.max(G.shake,5); G.teacherBustT=0;
+    pushToast('📝 you flash the fake pass. he squints. he lets you go. incredible.','',3.6);
+    SFX.blip&&SFX.blip();
+    const m0=G.monitor; if(m0){ m0.mode='patrol'; m0.lostT=0; m0.path=[]; }
+    return;
+  }
   G.busted++; G.bustFlash=1.4; G.shake=Math.max(G.shake,10); G.teacherBustT=0;
   SFX.bust(); if(VIEW==='fp'){ G.fpCaught=1; fpKick=26; }
   if(G.camp){ addClout(-6,'busted'); G.camp.stats.busts=(G.camp.stats.busts||0)+1; G.camp.notoriety=clamp((G.camp.notoriety||0)+8,0,100); saveCampaign(); }
-  let lost=0; for(const p of PRODUCTS){ lost+=G.inv[p.id]||0; G.inv[p.id]=0; }
+  const keepHalf = !!upgLvl('stash');
+  let lost=0; for(const p of PRODUCTS){ const had=G.inv[p.id]||0; const keep=keepHalf?Math.floor(had/2):0; lost+=had-keep; G.inv[p.id]=keep; }
+  if(keepHalf && lost>0) pushToast('🗄️ locker 237 held. half the bag survived.','',3);
   const fine=Math.min(G.cash, randi(18,40));
   G.cash-=fine;
   G.principalMsg=(G.principalOverride||pick(PRINCIPAL_LINES))+'  (lost '+lost+' items + $'+fine+')';
@@ -2492,6 +2553,41 @@ function updateDeskDealing(dt){
   G.deskAskT=(G.deskAskT===undefined? rand(5,9) : G.deskAskT) - dt;
   if(G.deskAskT<=0){ G.deskAskT=rand(11,18); startDeskDeal(); }
 }
+// ---- upgrade shop: spend the day's earnings on permanent gear ----
+function drawUpgradeShop(){
+  const g0=ctx.createLinearGradient(0,0,0,VH); g0.addColorStop(0,'#171128'); g0.addColorStop(1,'#0b0814');
+  ctx.fillStyle=g0; ctx.fillRect(0,0,VW,VH);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffcf3d'; ctx.font='900 22px sans-serif';
+  ctx.fillText('🔌 BIG TOE\'S BACK ROOM', VW/2, 44);
+  ctx.fillStyle='#cfc9e0'; ctx.font='italic 12px sans-serif';
+  ctx.fillText('"you got money now. spend it like an adult."', VW/2, 64);
+  ctx.fillStyle='#8fe08f'; ctx.font='bold 18px sans-serif';
+  ctx.fillText('$'+Math.round(G.cash), VW/2, 90);
+
+  const PW=Math.min(VW-24,392), PX=(VW-PW)/2;
+  let y=104; const rh=62;
+  for(const u of UPGRADES){
+    const lvl=upgLvl(u.id), cost=upgNextCost(u), maxed=(cost===null), afford=!maxed&&G.cash>=cost;
+    rr(PX,y,PW,rh-6,12);
+    ctx.fillStyle= maxed?'rgba(126,201,168,0.13)':'rgba(255,255,255,0.05)'; ctx.fill();
+    rr(PX,y,PW,rh-6,12); ctx.lineWidth=1.5;
+    ctx.strokeStyle= maxed?'rgba(126,201,168,0.5)':(afford?'rgba(255,207,61,0.45)':'rgba(255,255,255,0.10)'); ctx.stroke();
+    ctx.textAlign='left';
+    ctx.font='20px sans-serif'; ctx.fillText(u.emoji, PX+12, y+34);
+    ctx.fillStyle= maxed?'#7ec9a8':'#fff'; ctx.font='900 13px sans-serif';
+    ctx.fillText(u.name+(u.max>1?('  '+'●'.repeat(lvl)+'○'.repeat(u.max-lvl)):''), PX+42, y+22);
+    ctx.fillStyle='#a9a3bd'; ctx.font='11px sans-serif';
+    ctx.fillText(maxed? 'maxed out' : u.desc[lvl], PX+42, y+40);
+    if(!maxed){
+      btn(PX+PW-84, y+13, 72, 30, '$'+cost, ((id)=>()=>buyUpgrade(id))(u.id), afford?'#4a5bd6':'rgba(80,80,100,0.55)');
+    }
+    y+=rh;
+  }
+  ctx.textAlign='center';
+  btn(VW/2-110, Math.min(VH-64, y+8), 220, 48, '▶ NEXT DAY', ()=>{ G.upgShop=false; afterSummary(); }, '#ff7a3d');
+  ctx.textAlign='left';
+}
 function drawDeskDealUI(){
   const d=G.deskDeal; if(!d) return;
   const tw=G.teachWatch||{state:'board'};
@@ -2791,7 +2887,7 @@ function update(dt){
   // player movement (staggered = slower + wobble)
   if(!frozen && !player.seated && !player.rag){
     const v = FPON? inputVectorFP() : inputVector();
-    const spd=3.6 * (player.stagger>0?0.45:1) * (player.sneak?0.55:1);
+    const spd=3.6 * (player.stagger>0?0.45:1) * (player.sneak?sneakSpeedMult():1);
     const tx=v.x*spd, ty=v.y*spd;
     player.vx=lerp(player.vx,tx,0.22); player.vy=lerp(player.vy,ty,0.22);
     const sp=Math.hypot(player.vx,player.vy);
@@ -4235,7 +4331,7 @@ function drawHUD(){
   ctx.fillText('CHAD $'+G.chadCash, M+wCash-10, R2+RH*0.52);
   glassPanel(M+wCash+M,R2,wBag,RH);
   ctx.textAlign='center'; ctx.fillStyle= invTotal()>0?'#fff':'#ff9a9a'; ctx.font='bold 14px sans-serif';
-  ctx.fillText('🎒'+invTotal()+'/'+MAX_ITEMS, M+wCash+M+wBag/2, R2+RH*0.52);
+  ctx.fillText('🎒'+invTotal()+'/'+bagCap(), M+wCash+M+wBag/2, R2+RH*0.52);
   const hx=M+wCash+M+wBag+M;
   glassPanel(hx,R2,wHeat,RH, G.heat>66?'rgba(255,90,90,0.6)':'rgba(140,140,180,0.32)');
   ctx.textAlign='left'; ctx.fillStyle='rgba(255,255,255,0.72)'; ctx.font='bold 9px sans-serif';
@@ -4436,8 +4532,8 @@ function drawShop(){
   ctx.fillText('🔌 Big Toe — Product Shop', PX+16, PY+28);
   ctx.font='11px sans-serif'; ctx.fillStyle='#cfc9e0';
   ctx.fillText((pick.__toe || (pick.__toe=pick(TOE_LINES))).slice(7,60), PX+16, PY+46);
-  ctx.fillStyle= invTotal()>=MAX_ITEMS?'#ff9a9a':'#8fe08f'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
-  ctx.fillText('bag '+invTotal()+'/'+MAX_ITEMS+'  ·  $'+Math.round(G.cash), PX+PW-16, PY+46); ctx.textAlign='left';
+  ctx.fillStyle= invTotal()>=bagCap()?'#ff9a9a':'#8fe08f'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
+  ctx.fillText('bag '+invTotal()+'/'+bagCap()+'  ·  $'+Math.round(G.cash), PX+PW-16, PY+46); ctx.textAlign='left';
   // product rows
   let ry=PY+58;
   for(const pr of PRODUCTS){
@@ -4448,7 +4544,7 @@ function drawShop(){
     ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.fillText(pr.short, PX+44, ry+18);
     ctx.fillStyle='#9fb0d0'; ctx.font='11px sans-serif'; ctx.fillText('buy $'+pr.buy+' → sell $'+pr.sell, PX+44, ry+34);
     ctx.fillStyle='#ffe27a'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right'; ctx.fillText('x'+(G.inv[pr.id]||0), PX+PW-86, ry+28); ctx.textAlign='left';
-    const canBuy = invTotal()<MAX_ITEMS && G.cash>=pr.buy;
+    const canBuy = invTotal()<bagCap() && G.cash>=pr.buy;
     btn(PX+PW-74, ry+8, 58, 30, '+ $'+pr.buy, ((id)=>()=>buyProduct(id))(pr.id), canBuy?'#4a5bd6':'rgba(80,80,100,0.6)');
     ry+=rh+4;
   }
@@ -4891,7 +4987,8 @@ function drawSummary(){
   const pt=G.camp&&G.camp.pendingTransition;
   const nextLabel = pt==='crossroads'?'🔀 CROSSROADS' : pt==='ending'?'🏁 FINALE'
     : pt==='replay'?'🔁 RUN IT BACK' : (s.tutorial?'▶ DAY 2 — FOR REAL':'▶ NEXT DAY');
-  btn(VW/2-104, VH-78, 208, 52, nextLabel, ()=>afterSummary(), '#ff7a3d');
+  const goShop = (!pt || pt==='next' || pt==='replay') && G.camp;
+  btn(VW/2-104, VH-78, 208, 52, goShop?'🔌 SPEND YOUR MONEY':nextLabel, ()=>{ if(goShop){ G.upgShop=true; G.screen='upgrade'; } else afterSummary(); }, '#ff7a3d');
   ctx.textAlign='left';
 }
 
@@ -4903,6 +5000,7 @@ function render(){
   else if(G.screen==='story'){ drawStory(); }
   else if(G.screen==='actintro'){ drawActIntro(); }
   else if(G.screen==='crossroads'){ drawCrossroads(); }
+  else if(G.screen==='upgrade'){ drawUpgradeShop(); }
   else if(G.screen==='ending'){ drawEnding(); }
   else if(G.screen==='summary'){ drawSummary(); }
   else {
@@ -4943,7 +5041,7 @@ function frame(now){
 requestAnimationFrame(frame);
 
 // expose a couple things for headless testing
-window.__FG={G, startDay, startDeskDeal, updateDeskDealing, doDeal, performActionFP, get FPT(){return FPT;},
+window.__FG={G, startDay, startDeskDeal, bagCap, sellMult, buyUpgrade, upgLvl, updateDeskDealing, doDeal, performActionFP, get FPT(){return FPT;},
   __setHeld:(v)=>{actionHeld=!!v;},
   get deskDeal(){return G.deskDeal;}, get teachWatch(){return G.teachWatch;},
    beginDay, player, spawnCustomer, findPath, gi, grid, MW, MH, waitSpots, isFloor, PERIODS, PRODUCTS,
