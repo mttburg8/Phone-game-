@@ -129,6 +129,7 @@ function blobShadow(x,y,r){
 // ============================== [INPUT] =====================================
 const keys={};
 let actionPress=false;      // edge trigger consumed by game
+let actionHeld=false;       // continuous hold (desk dealing needs a steady hand)
 let shovePress=false;       // edge trigger for shove
 const joy={active:false,pid:-1,ox:0,oy:0,dx:0,dy:0};
 const look={active:false,pid:-1,lx:0,sx0:0,sy0:0,t0:0,moved:0};
@@ -165,7 +166,7 @@ canvas.addEventListener('pointerdown',e=>{
   // action button (bottom-right) — check first so it isn't swallowed by the joystick
   const ab=actBtnRect();
   if(dist2(px,py,ab.x,ab.y)<=(ab.r*1.3)*(ab.r*1.3)){
-    actBtnPid=e.pointerId; actionPress=true; return;
+    actBtnPid=e.pointerId; actionPress=true; actionHeld=true; return;
   }
   // shove button (left of action)
   const sb=shoveBtnRect();
@@ -204,7 +205,7 @@ function endPointer(e){
     look.active=false; look.pid=-1; look.moved=0;
   }
   if(e.pointerId===joy.pid){ joy.active=false; joy.pid=-1; joy.dx=0; joy.dy=0; }
-  if(e.pointerId===actBtnPid){ actBtnPid=-1; }
+  if(e.pointerId===actBtnPid){ actBtnPid=-1; actionHeld=false; }
   if(e.pointerId===shoveBtnPid){ shoveBtnPid=-1; }
 }
 canvas.addEventListener('pointerup',endPointer);
@@ -217,14 +218,14 @@ window.addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
   auStart();
   keys[k]=true;
-  if(k==='e'||k===' '){ actionPress=true; e.preventDefault(); }
+  if(k==='e'||k===' '){ if(!keys.__act)actionPress=true; keys.__act=1; actionHeld=true; e.preventDefault(); }
   if(k==='q'){ shovePress=true; e.preventDefault(); }
   if(k==='c'||k==='shift'){ if(VIEW==='fp'&&G.screen==='play'){ player.sneak=!player.sneak; } }
   if(k==='v'){ setView(VIEW==='fp'?'iso':'fp'); }
   if(k==='m'){ auMute(!AU.muted); }
   if(k==='enter'){ if(G.screen==='title')startDay(); else if(G.screen==='summary')afterSummary(); else if(G.screen==='story')beginDay(); else if(G.screen==='actintro')showDayStory(); else if(G.screen==='scene')advanceScene(); }
 });
-window.addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+window.addEventListener('keyup',e=>{ const k=e.key.toLowerCase(); keys[k]=false; if(k==='e'||k===' '){ keys.__act=0; actionHeld=false; } });
 
 function inputVector(){
   let x=0,y=0;
@@ -1525,6 +1526,7 @@ function actionLabel(){
     return '·';
   }
   if(p.kind==='gym' && G.holdingBall && !player.rag) return 'THROW 🤾';
+  if(G.deskDeal && !G.deskDeal.done) return (G.teachWatch&&G.teachWatch.state==='board')?'PASS 🤝':'WAIT ✋';
   if(player.seated) return 'STAND';
   for(const c of G.customers){ if(c.state==='wait'&&dist2(player.x,player.y,c.x,c.y)<1.3*1.3) return 'DEAL 💵'; }
   if((p.kind==='pass'||p.kind==='lunch'||p.kind==='gym')&&dist2(player.x,player.y,G.toe.x,G.toe.y)<1.6*1.6) return 'RE-UP';
@@ -2391,7 +2393,7 @@ function drawDayPlan(y0){
     ctx.font=(cur?'bold ':'')+'11px sans-serif';
     ctx.fillText((past?'✓ ':(cur?'▶ ':'· '))+p.name, PX+14, y);
     ctx.textAlign='right';
-    ctx.fillText(p.kind==='class'?'sit tight':(p.kind==='gym'?'dodgeball':(p.kind==='lunch'?'prime selling':'sell hard')), PX+PW-14, y);
+    ctx.fillText(p.kind==='class'?'deal at your desk':(p.kind==='gym'?'dodgeball':(p.kind==='lunch'?'prime selling':'sell hard')), PX+PW-14, y);
     ctx.textAlign='left';
     y+=17;
   }
@@ -2415,6 +2417,109 @@ function drawDayPlan(y0){
 }
 
 // ============================== [UPDATE] ====================================
+// ===================== [DESK DEALING — class is a heist] ====================
+// Class used to be dead air ("sit tight"). Now your deskmates want product and
+// the only cover is the teacher facing the board. Read the rhythm, make the pass.
+const DESK_ASKS=[
+  'psst. {P}. now. before she turns around 😐',
+  '{P}. under the desk. i have exact change and no shame.',
+  'bro i will Venmo you $40 for {P} RIGHT NOW',
+  'my life is falling apart and {P} would help. slide it.',
+  '{P}?? i have a test next period and a POINT TO PROVE',
+];
+const DESK_WIN=[
+  'smooth. nobody saw. you are basically a spy.',
+  'the handoff was CLEAN. he saluted you. weird but ok.',
+  'money under the desk like a tiny illegal bank. beautiful.',
+  'he whispered "you\'re the only economy that works." heavy.',
+];
+const DESK_CAUGHT=[
+  'TEACHER: "what is UNDER the desk. show me your HANDS."',
+  'TEACHER: "we do NOT do commerce in my classroom."',
+  'TEACHER: "I have taught for nineteen years. I know a handoff."',
+];
+function startDeskDeal(){
+  if(G.deskDeal || !G.camp) return;
+  const p=PERIODS[G.periodIdx]; if(!p||p.kind!=='class') return;
+  if(!invHasAny()) return;                       // nothing to sell, no prompt
+  const id=invFirstStocked(); const pr=PROD_BY_ID[id];
+  const name=pick(CUST_NAMES);
+  G.deskDeal={ id, name, price: Math.round(pr.sell*rand(1.15,1.45)), // desperation markup
+    state:'asked', t:0, hold:0, done:false };
+  pushToast(pick(DESK_ASKS).replace('{P}', pr.short), name, 4.2);
+  SFX.blip&&SFX.blip();
+}
+function endDeskScene(){ G.deskDeal=null; }
+// hold the action button while the teacher faces the board to complete the pass
+function deskDealProgress(dt, holding){
+  const d=G.deskDeal; if(!d||d.done) return;
+  const tw=G.teachWatch||{state:'board'};
+  const safe = (tw.state==='board');
+  if(holding){
+    if(safe){
+      d.hold=Math.min(1, d.hold + dt*0.85);
+      if(d.hold>=1){ // success
+        d.done=true;
+        const pr=PROD_BY_ID[d.id];
+        G.cash+=d.price; G.inv[d.id]=Math.max(0,(G.inv[d.id]||0)-1); G.deals++;
+        G.cashPop=1; cashFloat('+$'+d.price, player.x, player.y-0.2, '#8fe08f');
+        if(G.camp) addClout(3);
+        pushToast(pick(DESK_WIN), d.name, 3.4);
+        SFX.cash&&SFX.cash();
+        setTimeout(()=>{ if(G.deskDeal===d) endDeskScene(); }, 900);
+      }
+    } else { // moved while she was looking
+      d.done=true;
+      G.heat=clamp(G.heat+34,0,100);
+      pushToast(pick(DESK_CAUGHT),'',3.4);
+      G.shake=Math.max(G.shake,7); SFX.bonk&&SFX.bonk();
+      if(G.camp) addClout(-2);
+      setTimeout(()=>{ if(G.deskDeal===d) endDeskScene(); }, 900);
+    }
+  } else {
+    d.hold=Math.max(0, d.hold - dt*0.35);
+  }
+}
+function updateDeskDealing(dt){
+  const p=PERIODS[G.periodIdx];
+  if(!player.seated){ if(G.deskDeal) endDeskScene(); return; }
+  if(G.deskDeal){
+    G.deskDeal.t+=dt;
+    deskDealProgress(dt, !!actionHeld);
+    if(G.deskDeal.t>26 && !G.deskDeal.done){ pushToast(G.deskDeal.name+' gave up. "unbelievable." 😒','',2.6); endDeskScene(); }
+    return;
+  }
+  G.deskAskT=(G.deskAskT===undefined? rand(5,9) : G.deskAskT) - dt;
+  if(G.deskAskT<=0){ G.deskAskT=rand(11,18); startDeskDeal(); }
+}
+function drawDeskDealUI(){
+  const d=G.deskDeal; if(!d) return;
+  const tw=G.teachWatch||{state:'board'};
+  const safe=(tw.state==='board');
+  const PW=Math.min(VW-36,360), PX=(VW-PW)/2, PY=VH*0.30;
+  panel(PX,PY,PW,150,'rgba(20,16,34,0.97)', safe?'#7ec9a8':'#ff6b6b');
+  ctx.textAlign='center';
+  ctx.fillStyle=safe?'#7ec9a8':'#ff8f8f'; ctx.font='900 15px sans-serif';
+  ctx.fillText(safe? '✅ SHE\'S FACING THE BOARD' : '👀 SHE\'S LOOKING AT THE CLASS', VW/2, PY+28);
+  // the actual product being passed under the desk (Higgsfield package art)
+  if(artReady(d.id)){
+    const s=42; ctx.save(); rr(PX+14,PY+40,s,s,9); ctx.clip();
+    ctx.drawImage(IMGS[d.id], PX+14, PY+40, s, s); ctx.restore();
+    rr(PX+14,PY+40,s,s,9); ctx.lineWidth=2; ctx.strokeStyle=safe?'#7ec9a8':'#ff6b6b'; ctx.stroke();
+  }
+  ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif';
+  wrapText(d.name+' wants '+PROD_BY_ID[d.id].short+' — $'+d.price, VW/2, PY+52, PW-40, 16);
+  // hold meter
+  const bw=PW-60;
+  rr(PX+30,PY+72,bw,14,7); ctx.fillStyle='rgba(255,255,255,0.14)'; ctx.fill();
+  rr(PX+30,PY+72,bw*d.hold,14,7); ctx.fillStyle=safe?'#8fe08f':'#ff6b6b'; ctx.fill();
+  ctx.fillStyle='#cfc9e0'; ctx.font='12px sans-serif';
+  ctx.fillText(d.done?'…':'HOLD the action button — but ONLY while she faces the board', VW/2, PY+108);
+  ctx.fillStyle='#8a8a9e'; ctx.font='11px sans-serif';
+  ctx.fillText('let go the second she turns 👀', VW/2, PY+128);
+  ctx.textAlign='left';
+}
+
 // ============================== [V3 SYSTEMS] ================================
 // ---- teachers ----
 function spawnTeachers(){
@@ -2621,14 +2726,29 @@ function update(dt){
   // teacher-shove delayed bust (let the ragdoll land first, for comedy timing)
   if(G.teacherBustT>0){ G.teacherBustT-=dt; if(G.teacherBustT<=0) busted(); }
 
+
   // in-class activity scheduling
   if(!frozen){
-    if(p.kind==='class' && player.seated && !G.dialog && !G.activity){
+    if(p.kind==='class' && player.seated && !G.dialog && !G.activity && !G.deskDeal){
       G.actT-=dt;
       if(G.actT<=0){ G.actT=rand(9,14); startActivity(); }
     }
     updateActivity(dt);
+    // teacher attention cycle: the rhythm you exploit
+    if(p.kind==='class'){
+      G.teachWatch = G.teachWatch||{ph:0, state:'board', t:rand(2.5,4)};
+      const tw=G.teachWatch; tw.t-=dt; tw.ph+=dt;
+      if(tw.t<=0){
+        if(tw.state==='board'){ tw.state='turning'; tw.t=0.55; }
+        else if(tw.state==='turning'){ tw.state='scan'; tw.t=rand(2.2,3.6); }
+        else { tw.state='board'; tw.t=rand(3,5.5); if(Math.random()<0.35) tw.t*=0.6; }
+      }
+    } else if(G.teachWatch){ G.teachWatch=null; }
+    if(p.kind==='class') updateDeskDealing(dt); else if(G.deskDeal) endDeskScene();
   }
+
+  // heat maxed out = you're done, regardless of period (decay used to eat this)
+  if(!frozen && G.heat>=99.5 && !player.seated && G.screen==='play' && p.kind!=='end'){ busted(); }
 
   // heat dynamics
   if(!frozen){
@@ -4147,7 +4267,7 @@ function drawHUD(){
     } else if(p.kind==='class' && !player.seated){
       panel(24,R5,VW-48,34,'rgba(90,20,30,0.9)','rgba(255,120,120,0.5)');
       ctx.fillStyle='#ffd9d9'; ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText('⚠ SKIPPING CLASS — get to your desk', VW/2, R5+17);
+      ctx.fillText(G.deskDeal? '🤝 make the pass — watch the teacher' : '⚠ SKIPPING CLASS — get to your desk', VW/2, R5+17);
     } else if(p.kind==='gym'){
       const inGym = roomAt(player.x,player.y)===F_GYM;
       panel(24,R5,VW-48,34, inGym?'rgba(60,44,20,0.92)':'rgba(90,50,20,0.92)', inGym?'rgba(255,200,120,0.5)':'rgba(255,150,80,0.6)');
@@ -4797,6 +4917,7 @@ function render(){
     ctx.fillStyle=g; ctx.fillRect(0,0,VW,VH);
     drawHUD();
     drawActivity();
+    drawDeskDealUI();
   }
   // consume action + shove edges
   if(actionPress){ actionPress=false; if(G.screen==='play') performAction(); }
@@ -4822,7 +4943,10 @@ function frame(now){
 requestAnimationFrame(frame);
 
 // expose a couple things for headless testing
-window.__FG={G, startDay, beginDay, player, spawnCustomer, findPath, gi, grid, MW, MH, waitSpots, isFloor, PERIODS, PRODUCTS,
+window.__FG={G, startDay, startDeskDeal, updateDeskDealing, doDeal, performActionFP, get FPT(){return FPT;},
+  __setHeld:(v)=>{actionHeld=!!v;},
+  get deskDeal(){return G.deskDeal;}, get teachWatch(){return G.teachWatch;},
+   beginDay, player, spawnCustomer, findPath, gi, grid, MW, MH, waitSpots, isFloor, PERIODS, PRODUCTS,
   _startActivity:(ty)=>{ if(ty==='quiz')G.activity={type:'quiz',q:QUIZ_QS[0],t:8,dur:8}; else if(ty==='called')G.activity={type:'called',q:CALLED_QS[0],t:7,dur:7}; else if(ty==='awake')G.activity={type:'awake',taps:0,need:8,t:4.5,dur:4.5}; else G.activity={type:'note',t:6,dur:6}; },
   _answerQuiz:answerQuiz, _tapAwake:tapAwake, _readNote:readNote,
   _shoveTeacher:()=>{ const t=G.teachers[0]; if(t){ player.x=t.x+0.5; player.y=t.y; doShove(); return t.name; } return 'none'; },
